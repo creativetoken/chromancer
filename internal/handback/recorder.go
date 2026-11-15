@@ -74,6 +74,10 @@ type AuthRecorder interface {
 	// VaryingHeaders returns request header names whose values differed across
 	// post-login XHRs — a signal for JS-computed per-request headers.
 	VaryingHeaders() []string
+	// TokenSubmitted reports whether a captcha token/answer value was carried in
+	// an outgoing request (post body or header) — proof the injected solve
+	// actually reached the backend before judging acceptance.
+	TokenSubmitted(value string) bool
 }
 
 var secretHeaderRe = regexp.MustCompile(`(?i)^(authorization|cookie|set-cookie|x-csrf-token|x-xsrf-token|x-api-key|x-auth-token|proxy-authorization)$`)
@@ -265,6 +269,28 @@ func (r *Recorder) VaryingHeaders() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TokenSubmitted implements AuthRecorder: true if `value` appears in any
+// captured request's post body or header values. A short value is ignored to
+// avoid coincidental matches.
+func (r *Recorder) TokenSubmitted(value string) bool {
+	if len(value) < 8 {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.rec.Entries {
+		if strings.Contains(e.Request.PostData, value) {
+			return true
+		}
+		for _, h := range e.Request.Headers {
+			if strings.Contains(h.Value, value) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isXHR(t string) bool { return t == "XHR" || t == "Fetch" }

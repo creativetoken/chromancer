@@ -57,6 +57,7 @@ const (
 	ResultToken     ResultKind = iota // a verification token to inject
 	ResultUIActions                   // clicks on set-of-marks regions
 	ResultHandoff                     // a human solved it live; core does not inject
+	ResultText                        // text to type into a text-captcha input
 )
 
 // RegionClick is a click target for ResultUIActions.
@@ -68,8 +69,22 @@ type RegionClick struct {
 type Result struct {
 	Kind    ResultKind    `json:"kind"`
 	Token   string        `json:"token,omitempty"`
+	Text    string        `json:"text,omitempty"` // text-captcha answer (ResultText)
 	Actions []RegionClick `json:"actions,omitempty"`
 	SolveID string        `json:"solve_id"`
+}
+
+// Payload returns the verification value a token/text result carries (for the
+// acceptance check that it reached the backend). Empty for UIActions/Handoff.
+func (r Result) Payload() string {
+	switch r.Kind {
+	case ResultToken:
+		return r.Token
+	case ResultText:
+		return r.Text
+	default:
+		return ""
+	}
 }
 
 // Capabilities is what a Solver advertises (cached from Describe at load).

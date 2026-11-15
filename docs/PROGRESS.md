@@ -11,7 +11,14 @@
   failed-submit response body. Fixtures in `testdata/captcha/fixtures/` (13 classes + 2 decoys);
   unit tests prove classification + extraction + **no false positives**. Score/invisible challenges
   are non-blocking. Lab captcha/handoff e2e stay green.
-- [ ] **C2 — injection & acceptance detection** (per-vendor callback invocation; token-reached-backend check via AuthRecorder; rejection → fresh challenge).
+- [x] **C2 — injection & acceptance detection.** Injector sets every matching response field,
+  invokes the page-registered success callback (named global from `data-callback`, incl. `obj.fn`,
+  plus lab hooks), sets both h-captcha/g-recaptcha fields for hCaptcha, and types text answers
+  (`ResultText`) into the text-captcha input. Acceptance gate: a token/text solve is "applied" only
+  when the value is observed in an outgoing request (`Recorder.TokenSubmitted`, the reached-backend
+  proof); accepted = applied AND challenge gone; otherwise rejected → the resolve loop re-detects a
+  fresh challenge. Unit tests: `TokenSubmitted` (body + header, min length), `Result.Payload`.
+  Full per-vendor browser proof lands in C4 with the vendor mocks.
 - [ ] **C3 — solvers** (testmode test-sitekeys, native browser-solve, vision grid/text, external generic gRPC/stdio adapter `plugins/captcha-generic/`, per-(target,vendor,solver) stats + adaptive order).
 - [ ] **C4 — lab vendor mocks** (mock-recaptcha-v2/invisible/v3, mock-hcaptcha, mock-turnstile managed/invisible, image-grid, text-captcha, captcha-hard, captcha-on-failed-submit) + mock external solver service.
 - [ ] **C5 — eval (solve rate / time / cost per vendor×solver), `docs/CAPTCHA.md`, ARCHITECTURE §6.6 refresh, tag `captcha-v1`.**

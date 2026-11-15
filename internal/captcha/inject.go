@@ -18,22 +18,32 @@ type genericInjector struct {
 // Vendor implements Injector.
 func (g genericInjector) Vendor() Vendor { return g.vendor }
 
-const injectJS = `(sel, token) => {
-  let el = null;
-  for (const s of sel.split(',')) { el = document.querySelector(s.trim()); if (el) break; }
-  if (!el) {
-    // Some widgets expect a hidden input created on demand.
-    el = document.querySelector('[data-captcha-token]') || document.querySelector('input[name="captcha-token"]');
-  }
-  if (el) {
+// injectJS sets every matching response field to the token, dispatches input
+// events, and invokes any registered success callback: a named global
+// (data-callback), the client-config callback reCAPTCHA/hCaptcha/Turnstile
+// register, or the common lab hooks. `cb` is the data-callback name (may be "").
+const injectJS = `(sel, token, cb) => {
+  let any = false;
+  const setAll = (q) => document.querySelectorAll(q).forEach(el => {
     el.value = token;
     el.dispatchEvent(new Event('input', {bubbles:true}));
     el.dispatchEvent(new Event('change', {bubbles:true}));
-  }
-  // Fire a page-registered callback if present (lab + common patterns).
+    any = true;
+  });
+  for (const s of sel.split(',')) { setAll(s.trim()); }
+  if (!any) { setAll('[data-captcha-token]'); setAll('input[name="captcha-token"]'); }
+  // Named global callback (data-callback="fn" or "obj.fn").
+  const callNamed = (name) => {
+    if (!name) return;
+    try {
+      const fn = name.split('.').reduce((o,k)=>o&&o[k], window);
+      if (typeof fn === 'function') fn(token);
+    } catch(e){}
+  };
+  callNamed(cb);
   if (typeof window.__labCaptchaCallback === 'function') { try { window.__labCaptchaCallback(token); } catch(e){} }
   if (typeof window.onCaptchaSuccess === 'function') { try { window.onCaptchaSuccess(token); } catch(e){} }
-  return !!el;
+  return any;
 }`
 
 // Apply implements Injector.
@@ -48,12 +58,33 @@ func (g genericInjector) Apply(ctx context.Context, p *browser.Page, c Challenge
 			}
 		}
 		return nil
+	case ResultText:
+		// Type the answer into the text-captcha input (no vendor callback).
+		sel := c.fieldSel
+		if sel == "" {
+			sel = c.Params[ParamInputSel]
+		}
+		if sel == "" {
+			return fmt.Errorf("captcha: text result has no input selector")
+		}
+		v, err := p.Eval(ctx, injectJS, sel, r.Text, "")
+		if err != nil {
+			return fmt.Errorf("captcha: type text answer: %w", err)
+		}
+		if !v.Bool() {
+			return fmt.Errorf("captcha: text-captcha input %q not found", sel)
+		}
+		return nil
 	default: // ResultToken
 		sel := c.fieldSel
 		if sel == "" {
 			sel = responseField(c.Vendor)
 		}
-		v, err := p.Eval(ctx, injectJS, sel, r.Token)
+		// hCaptcha pages often also carry a g-recaptcha-response field.
+		if c.Vendor == VendorHCaptcha {
+			sel += `, textarea[name="g-recaptcha-response"]`
+		}
+		v, err := p.Eval(ctx, injectJS, sel, r.Token, c.Params[ParamCallback])
 		if err != nil {
 			return fmt.Errorf("captcha: inject token: %w", err)
 		}

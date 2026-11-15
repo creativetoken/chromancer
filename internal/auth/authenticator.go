@@ -42,9 +42,10 @@ type Authenticator struct {
 	MaxSteps   int                   // post-submit resolution attempts (default 6)
 	Timeout    time.Duration
 
-	trace        handback.Trace
-	base         Baseline
-	pendingSolve string
+	trace          handback.Trace
+	base           Baseline
+	pendingSolve   string
+	pendingPayload string // token/text of the pending solve (for the reached-backend check)
 }
 
 // Run authenticates (target, account) in the given mode and returns the
@@ -226,8 +227,8 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 			return fmt.Errorf("auth: perceive: %w", err)
 		}
 		// Report the outcome of any prior CAPTCHA solve (accepted iff the
-		// challenge is gone from the page).
-		a.reportCaptchaOutcome(ctx, p, st)
+		// challenge is gone AND the token actually reached the backend).
+		a.reportCaptchaOutcome(ctx, p, st, rec)
 		// Verification is checked first: a page asking for a code/link is never
 		// "done", even if the URL changed (a weak success signal).
 		if vs := DetectVerifyStep(st); vs.Needed {
@@ -340,6 +341,7 @@ func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error
 			if !a.Captcha.Exhausted(ch) {
 				if res, err := a.Captcha.Resolve(ctx, p, ch); err == nil {
 					a.pendingSolve = res.SolveID
+					a.pendingPayload = res.Payload()
 				}
 			}
 			return nil
@@ -355,6 +357,7 @@ func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error
 			return fmt.Errorf("%w: captcha: %v", ErrFlowFailed, err)
 		}
 		a.pendingSolve = res.SolveID
+		a.pendingPayload = res.Payload()
 		return nil
 	}
 }
@@ -368,13 +371,22 @@ func (a *Authenticator) detectors() []captcha.Detector {
 
 // reportCaptchaOutcome reports whether a prior solve was accepted, judged by
 // whether a challenge is still present.
-func (a *Authenticator) reportCaptchaOutcome(ctx context.Context, p *browser.Page, st perceive.State) {
+func (a *Authenticator) reportCaptchaOutcome(ctx context.Context, p *browser.Page, st perceive.State, rec *handback.Recorder) {
 	if a.pendingSolve == "" || a.Captcha == nil {
 		return
 	}
 	_, still := captcha.DetectAny(ctx, a.detectors(), p, st, captcha.NetSignals{})
-	_ = a.Captcha.Outcome(ctx, a.pendingSolve, !still)
+	// A token/text solve counts as applied only if it actually reached the
+	// backend (observed in an outgoing request). Score/invisible solves carry no
+	// payload we inject, so they are always "applied".
+	applied := a.pendingPayload == "" || (rec != nil && rec.TokenSubmitted(a.pendingPayload))
+	accepted := applied && !still
+	if a.pendingPayload != "" && !applied {
+		a.log("captcha", map[string]any{"applied": false, "note": "solved token not observed in submit"})
+	}
+	_ = a.Captcha.Outcome(ctx, a.pendingSolve, accepted)
 	a.pendingSolve = ""
+	a.pendingPayload = ""
 }
 
 // doHandoff escalates to a human for any dead end.

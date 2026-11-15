@@ -27,6 +27,7 @@ type Request struct {
 	Account  string
 	Target   string // app/site the login is for (used to pick a per-target TOTP seed)
 	Hint     string // "code sent to ***1234"
+	WantLink bool   // the page expects a magic link rather than a code
 	Since    time.Time
 	Deadline time.Time
 }

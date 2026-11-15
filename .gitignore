@@ -9,3 +9,8 @@ workspace/
 .DS_Store
 .idea/
 .vscode/
+
+# local secrets (never commit)
+.env
+.env.*
+!.env.example

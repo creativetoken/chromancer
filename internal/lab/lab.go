@@ -347,5 +347,8 @@ func allApps() []App {
 		&totpApp{},
 		&formErrorsApp{},
 		&ssoOnlyApp{},
+		&captchaMockApp{},
+		&captchaBlockApp{},
+		&stuckLoginApp{},
 	}
 }

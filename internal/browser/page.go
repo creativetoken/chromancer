@@ -160,6 +160,18 @@ func (p *Page) Click(ctx context.Context, el *rod.Element) error {
 	return nil
 }
 
+// ClickAt clicks at viewport coordinates (used for set-of-marks region clicks).
+func (p *Page) ClickAt(ctx context.Context, x, y int) error {
+	rp := p.rp.Context(ctx)
+	if err := rp.Mouse.MoveTo(proto.NewPoint(float64(x), float64(y))); err != nil {
+		return fmt.Errorf("browser: move: %w", err)
+	}
+	if err := rp.Mouse.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return fmt.Errorf("browser: click at: %w", err)
+	}
+	return nil
+}
+
 // TypeInto clears an input and types text into it (human-like via rod's
 // Input which dispatches key events).
 func (p *Page) TypeInto(ctx context.Context, el *rod.Element, text string) error {

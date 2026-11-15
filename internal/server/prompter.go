@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/creativetoken/chromancer/internal/captcha"
 )
 
 // prompter mediates pending challenges (verification / human handoff) between
@@ -89,6 +91,26 @@ func (a *jobAsker) AskChallenge(ctx context.Context, channel, account, hint stri
 		return "", "", false, err
 	}
 	return ans.Code, ans.Link, ans.Approved, nil
+}
+
+// AskHuman implements captcha.Asker, surfacing a needs_human handoff.
+func (a *jobAsker) AskHuman(ctx context.Context, req captcha.HandoffRequest) error {
+	pend := Pending{ChallengeID: req.ChallengeID, Kind: "human", ViewURL: req.ViewURL, Reason: string(req.Reason), ExpiresAt: req.ExpiresAt}
+	surface := func(p *Pending) {
+		a.m.mu.Lock()
+		defer a.m.mu.Unlock()
+		if p == nil {
+			if a.j.State == StateNeedsHuman || a.j.State == StateNeedsVerification {
+				a.j.State = StateRunning
+			}
+			a.j.Pending = nil
+			return
+		}
+		a.j.Pending = p
+		a.j.State = StateNeedsHuman
+	}
+	_, err := a.j.prompt.Ask(ctx, pend, surface)
+	return err
 }
 
 // resolve delivers an answer to a waiting challenge.

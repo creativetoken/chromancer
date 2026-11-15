@@ -10,6 +10,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/audit"
 	"github.com/creativetoken/chromancer/internal/auth/entry"
 	"github.com/creativetoken/chromancer/internal/browser"
+	"github.com/creativetoken/chromancer/internal/captcha"
 	"github.com/creativetoken/chromancer/internal/core"
 	"github.com/creativetoken/chromancer/internal/handback"
 	"github.com/creativetoken/chromancer/internal/identity"
@@ -35,11 +36,15 @@ type Authenticator struct {
 	EntryCache string
 	Handlers   []FlowHandler
 	Verifier   verify.Provider // optional; enables verification steps
-	MaxSteps   int             // post-submit resolution attempts (default 6)
+	Detectors  []captcha.Detector
+	Captcha    captcha.Resolver      // optional; enables CAPTCHA handling
+	Handoff    *captcha.HumanHandoff // optional; escalation for any dead end
+	MaxSteps   int                   // post-submit resolution attempts (default 6)
 	Timeout    time.Duration
 
-	trace handback.Trace
-	base  Baseline
+	trace        handback.Trace
+	base         Baseline
+	pendingSolve string
 }
 
 // Run authenticates (target, account) in the given mode and returns the
@@ -168,7 +173,7 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 	}
 	a.base = TakeBaseline(ctx, p)
 
-	deps := FlowDeps{Page: p, Perceiver: a.Perceiver, Log: a.log, Trace: a.tracef, Timeout: a.Timeout}
+	deps := FlowDeps{Page: p, Perceiver: a.Perceiver, Log: a.log, Trace: a.tracef, Timeout: a.Timeout, Captcha: a.captchaHook(p)}
 	var handler FlowHandler
 	if mode == Signup {
 		handler = SignupHandler{Profile: a.Profile}
@@ -195,14 +200,34 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 	}
 	formErrRetries := 0
 	verified := false
+	handoffUsed := false
 	var since time.Time
 	actedHash := map[perceive.StateHash]int{}
+	// escalate hands a dead end (stuck / unknown flow) to a human when one is
+	// configured, once; otherwise it returns the sentinel error.
+	escalate := func(reason captcha.BlockReason, sentinel error) error {
+		if a.Handoff != nil && !handoffUsed {
+			handoffUsed = true
+			if err := a.doHandoff(ctx, reason); err != nil {
+				return err
+			}
+			// The human intervened; give the form a fresh chance to progress.
+			for k := range actedHash {
+				delete(actedHash, k)
+			}
+			return nil
+		}
+		return sentinel
+	}
 	for step := 0; step < maxSteps; step++ {
 		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
 		st, hash, err := a.Perceiver.Perceive(ctx, p)
 		if err != nil {
 			return fmt.Errorf("auth: perceive: %w", err)
 		}
+		// Report the outcome of any prior CAPTCHA solve (accepted iff the
+		// challenge is gone from the page).
+		a.reportCaptchaOutcome(ctx, p, st)
 		// Verification is checked first: a page asking for a code/link is never
 		// "done", even if the URL changed (a weak success signal).
 		if vs := DetectVerifyStep(st); vs.Needed {
@@ -228,13 +253,27 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 			mode = Login
 		}
 		f := Classify(st)
+		// Is a CAPTCHA present on this form? If so, allow more same-form rounds
+		// (the handler re-fills + re-solves each round; the captcha hook escalates
+		// to a human when the solver chain is exhausted).
+		hasCaptcha := false
+		if a.Captcha != nil {
+			_, hasCaptcha = captcha.DetectAny(ctx, a.detectors(), p, st, captcha.NetSignals{})
+		}
 		switch {
 		case f.Password != nil:
-			if f.HasAlert && formErrRetries >= 2 {
+			limit := 2
+			if hasCaptcha {
+				limit = 5
+			}
+			if f.HasAlert && !hasCaptcha && formErrRetries >= 2 {
 				return fmt.Errorf("%w: form error: %s", ErrFlowFailed, f.AlertText)
 			}
-			if actedHash[hash] >= 2 {
-				return fmt.Errorf("%w: form did not progress", ErrStuck)
+			if actedHash[hash] >= limit {
+				if err := escalate(captcha.ReasonStuck, fmt.Errorf("%w: form did not progress", ErrStuck)); err != nil {
+					return err
+				}
+				continue
 			}
 			actedHash[hash]++
 			// After a signup+verify, or when switched to login, submit login creds;
@@ -266,10 +305,85 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 		case IsSSOOnly(st):
 			return fmt.Errorf("%w", ErrSSOOnly)
 		default:
-			return fmt.Errorf("%w: unexpected page with no actionable form", ErrStuck)
+			// Unrecognised page with no actionable form → escalate to a human.
+			if err := escalate(captcha.ReasonUnknownFlow, fmt.Errorf("%w: unexpected page with no actionable form", ErrUnknownFlow)); err != nil {
+				return err
+			}
 		}
 	}
 	return fmt.Errorf("%w: did not authenticate after %d steps", ErrStuck, maxSteps)
+}
+
+// captchaHook returns the pre-submit CAPTCHA hook for the flow handlers: it
+// detects a challenge, resolves it through the chain (injecting the token), and
+// escalates to a human when the chain is exhausted or unsupported.
+func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error {
+	if a.Captcha == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		st, _, err := a.Perceiver.Perceive(ctx, p)
+		if err != nil {
+			return nil
+		}
+		ch, ok := captcha.DetectAny(ctx, a.detectors(), p, st, captcha.NetSignals{})
+		if !ok {
+			return nil
+		}
+		a.trace.Captcha = append(a.trace.Captcha, string(ch.Vendor))
+		a.log("captcha", map[string]any{"vendor": string(ch.Vendor), "sitekey": ch.SiteKey})
+		if a.Captcha.Exhausted(ch) {
+			return a.doHandoff(ctx, captcha.ReasonCaptchaExhausted)
+		}
+		res, err := a.Captcha.Resolve(ctx, p, ch)
+		if err != nil {
+			if errors.Is(err, captcha.ErrExhausted) || errors.Is(err, captcha.ErrNoSolver) || errors.Is(err, captcha.ErrDeclined) {
+				return a.doHandoff(ctx, captcha.ReasonCaptchaExhausted)
+			}
+			return fmt.Errorf("%w: captcha: %v", ErrFlowFailed, err)
+		}
+		a.pendingSolve = res.SolveID
+		return nil
+	}
+}
+
+func (a *Authenticator) detectors() []captcha.Detector {
+	if len(a.Detectors) > 0 {
+		return a.Detectors
+	}
+	return captcha.DefaultDetectors()
+}
+
+// reportCaptchaOutcome reports whether a prior solve was accepted, judged by
+// whether a challenge is still present.
+func (a *Authenticator) reportCaptchaOutcome(ctx context.Context, p *browser.Page, st perceive.State) {
+	if a.pendingSolve == "" || a.Captcha == nil {
+		return
+	}
+	_, still := captcha.DetectAny(ctx, a.detectors(), p, st, captcha.NetSignals{})
+	_ = a.Captcha.Outcome(ctx, a.pendingSolve, !still)
+	a.pendingSolve = ""
+}
+
+// doHandoff escalates to a human for any dead end.
+func (a *Authenticator) doHandoff(ctx context.Context, reason captcha.BlockReason) error {
+	if a.Handoff == nil {
+		return fmt.Errorf("%w: %s (no human handoff configured)", ErrFlowFailed, reason)
+	}
+	a.trace.HumanHandoff = string(reason)
+	a.log("human_handoff", map[string]any{"reason": string(reason)})
+	deadline := time.Now().Add(120 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	if err := a.Handoff.Escalate(ctx, reason, deadline); err != nil {
+		if errors.Is(err, captcha.ErrHandoffTimeout) {
+			return fmt.Errorf("%w: %v", ErrHandoffTimeout, err)
+		}
+		return fmt.Errorf("%w: handoff: %v", ErrFlowFailed, err)
+	}
+	a.trace.Add("human handoff resolved (%s)", reason)
+	return nil
 }
 
 // doVerify fetches a code/link and applies it to the page.
@@ -442,6 +556,8 @@ func FailReason(err error) string {
 		return "not_authenticated"
 	case errors.Is(err, ErrStuck):
 		return "stuck"
+	case errors.Is(err, ErrHandoffTimeout):
+		return "handoff_timeout"
 	case errors.Is(err, core.ErrBudgetExhausted):
 		return "budget_exhausted"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

@@ -47,6 +47,7 @@ var (
 	ErrStuck            = errors.New("stuck")
 	ErrEntryNotFound    = errors.New("entrypoint_not_found")
 	ErrNotAuthenticated = errors.New("not_authenticated")
+	ErrHandoffTimeout   = errors.New("handoff_timeout")
 )
 
 var (
@@ -171,7 +172,19 @@ type FlowDeps struct {
 	Perceiver perceive.Perceiver
 	Log       func(kind string, payload map[string]any)
 	Trace     func(format string, args ...any)
-	Timeout   time.Duration
+	// Captcha, if set, is called by a handler just before it submits a form: it
+	// detects and resolves any CAPTCHA (injecting the token) or escalates to a
+	// human. A no-op when no challenge is present.
+	Captcha func(ctx context.Context) error
+	Timeout time.Duration
+}
+
+// beforeSubmit runs the captcha hook if present.
+func (d FlowDeps) beforeSubmit(ctx context.Context) error {
+	if d.Captcha == nil {
+		return nil
+	}
+	return d.Captcha(ctx)
 }
 
 // FlowHandler handles one login/signup variant. It owns the form submit.
@@ -277,6 +290,9 @@ func (h FormHandler) Run(ctx context.Context, st perceive.State, creds identity.
 		return fmt.Errorf("type password: %w", err)
 	}
 	d.Trace("form: filled identifier+password, submitting")
+	if err := d.beforeSubmit(ctx); err != nil {
+		return err
+	}
 	if err := a.submit(ctx, f, f.Password); err != nil {
 		return fmt.Errorf("submit: %w", err)
 	}
@@ -314,6 +330,9 @@ func (h MultiStepHandler) Run(ctx context.Context, st perceive.State, creds iden
 				return err
 			}
 			d.Trace("multistep: step %d password submitted", step)
+			if err := d.beforeSubmit(ctx); err != nil {
+				return err
+			}
 			if err := a.submit(ctx, f, f.Password); err != nil {
 				return err
 			}

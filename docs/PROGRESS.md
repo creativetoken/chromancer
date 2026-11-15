@@ -4,7 +4,23 @@
 > continue from **Next** without redoing finished work.
 
 ## Current milestone
-**M3 — Signup + verification** (verifying full e2e). M1, M2 complete + tagged.
+**M4 — CAPTCHA + human handoff** (verifying full e2e). M1–M3 complete + tagged.
+
+## M4 done
+- `captcha` package: `Detector`/`Injector`/`Resolver`/`Solver` contracts; per-vendor
+  **detectors** (mock + reCAPTCHA v2/v3, hCaptcha, Turnstile via DOM/script/sitekey signatures);
+  generic token/UIActions **injector**; **Resolver** (Describe-prefiltered chain, budget, fresh
+  challenge per retry, Outcome→Report); **HumanHandoff** (headful / localhost-or-token remote
+  view + notify + handoff timeout).
+- Solvers: in-process **testmode** + **vision** (via router, mock-tested); **out-of-process
+  plugin** over a stdio-JSON transport mirroring `proto/solver.proto` (see DECISIONS re: gRPC);
+  **mocksolver** binary; **conformance suite** (`plugin.Conform`) run against in-proc + subprocess.
+- Wired into the auth flow: pre-submit `Captcha` hook + resolve-loop outcome reporting + stuck/
+  unknown-flow escalation to handoff; bridged through `app.RunAuth` and the JobManager
+  (`needs_human` → `resolve_challenge(done)`).
+- Lab: captcha-mock, captcha-block, stuck-login. e2e: testmode + gRPC-style plugin solve,
+  block→human-handoff (direct + MCP), handoff timeout, stuck→handoff. All passing individually;
+  full suite running (task b3xnt1vho).
 
 ## M3 done
 - `verify` package: `Provider` interface + `Chain`; built-in **TOTP** (RFC 6238, no dep),

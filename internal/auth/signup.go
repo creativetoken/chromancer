@@ -99,6 +99,9 @@ func (h SignupHandler) Run(ctx context.Context, st perceive.State, creds identit
 		}
 	}
 	d.Trace("signup: filled form, submitting")
+	if err := d.beforeSubmit(ctx); err != nil {
+		return err
+	}
 	if err := a.submit(ctx, f, f.Password); err != nil {
 		return err
 	}

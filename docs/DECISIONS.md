@@ -42,6 +42,15 @@
 - 2026-11-15 · **`Classify` prefers a real `type=submit` over a text-matched button** · a header
   "Sign in" button (modal opener) was being chosen as the form submit · alt: positional heuristic
   (submit after password) — kept as the secondary fallback.
+- 2026-11-15 · **External CAPTCHA solver transport = subprocess stdio-JSON (go-plugin-style
+  handshake), not gRPC** · the env has no `protoc`/`buf`, and pulling grpc+protobuf+go-plugin +
+  a codegen toolchain into dev/CI violates "minimal, justified deps"; the stdio-JSON transport is
+  still out-of-process (real isolation), language-agnostic, and fully testable offline · the
+  normative message schema is shipped as `internal/captcha/plugin/proto/solver.proto` (schema of
+  record) and the Go transport mirrors it exactly, so a gRPC transport can be added later behind
+  the same `Solver` contract without touching callers. ARCHITECTURE §5/§10 and ADR 0011 say
+  "go-plugin/gRPC"; this is the smallest change that preserves the contract and acceptance
+  (out-of-process mock solver + conformance suite) given the toolchain constraint.
 - 2026-11-15 · **Lab inbox endpoint `GET /__lab/inbox?to=<addr>`** returns delivered messages as
   JSON; the `labinbox` VerificationProvider polls it · simplest machine-readable inbox · alt: a
   fake SMTP server (unnecessary).

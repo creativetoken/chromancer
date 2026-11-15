@@ -1,0 +1,52 @@
+syntax = "proto3";
+package captcha.plugin.v1;
+
+// SolverService is the normative contract for an external CAPTCHA solver.
+// The host (core) never sends the browser page — only the Challenge. The agent
+// applies the returned Result to the page via its own per-vendor Injector.
+//
+// NOTE: the reference transport in this repo is a subprocess speaking
+// newline-delimited JSON whose message shapes mirror these definitions exactly
+// (see internal/captcha/plugin/protocol.go). This .proto is the schema of
+// record; a gRPC transport can be added behind the same Solver contract.
+service SolverService {
+  rpc Describe (DescribeRequest) returns (Capabilities); // called once at load
+  rpc Solve    (SolveRequest)    returns (SolveResult);
+  rpc Report   (ReportRequest)   returns (ReportAck);    // acceptance feedback
+}
+
+message DescribeRequest {}
+
+message Capabilities {
+  repeated string vendors = 1;  // "recaptcha_v2","hcaptcha","turnstile","mock",...
+  repeated string kinds   = 2;  // "interactive","score","image","custom"
+  bool   needs_image      = 3;
+  bool   needs_proxy      = 4;  // IP-bound tokens
+  bool   egress_external  = 5;
+  double est_cost_usd     = 6;
+  int64  est_latency_ms   = 7;
+}
+
+message Challenge {
+  string vendor   = 1;
+  string kind     = 2;
+  string site_key = 3;
+  string page_url = 4;          // origin only; no page contents
+  bytes  image    = 5;          // only when needs_image
+  map<string,string> params = 6;
+}
+
+message SolveRequest { Challenge challenge = 1; string solve_id = 2; }
+
+message SolveResult {
+  string solve_id = 1;
+  // result_kind: 0=token, 1=ui_actions, 2=handoff
+  int32  result_kind = 2;
+  string token       = 3;
+  repeated Region regions = 4;  // for ui_actions
+}
+
+message Region { int32 x = 1; int32 y = 2; int32 w = 3; int32 h = 4; }
+
+message ReportRequest { string solve_id = 1; bool accepted = 2; }
+message ReportAck {}

@@ -14,6 +14,9 @@ import (
 	"github.com/creativetoken/chromancer/internal/audit"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/browser"
+	"github.com/creativetoken/chromancer/internal/captcha"
+	"github.com/creativetoken/chromancer/internal/captcha/plugin"
+	"github.com/creativetoken/chromancer/internal/captcha/solver"
 	"github.com/creativetoken/chromancer/internal/config"
 	"github.com/creativetoken/chromancer/internal/core"
 	"github.com/creativetoken/chromancer/internal/handback"
@@ -23,6 +26,13 @@ import (
 	"github.com/creativetoken/chromancer/internal/perceive"
 	"github.com/creativetoken/chromancer/internal/verify"
 )
+
+// Asker bridges verification and human-handoff prompts to a caller (the MCP
+// job surface implements it). A nil Asker means CLI/interactive prompts.
+type Asker interface {
+	verify.Asker
+	captcha.Asker
+}
 
 // App holds process-wide dependencies.
 type App struct {
@@ -73,7 +83,7 @@ type AuthResult struct {
 // RunAuth launches a browser and runs the authenticator for one account. asker
 // (may be nil) bridges verification to an MCP pending/answer surface; when nil
 // an interactive CLI prompt is used.
-func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, asker verify.Asker) AuthResult {
+func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, asker Asker) AuthResult {
 	ws, err := a.Cfg.ForAccount(account)
 	if err != nil {
 		return AuthResult{Err: err, Reason: "flow_failed"}
@@ -109,6 +119,7 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	}
 	defer b.Close()
 
+	resolver, handoff := a.captchaKit(asker, al, bud)
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,
 		Perceiver: perceive.New(), Router: a.Router,
@@ -117,6 +128,8 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 		Audit:      al,
 		Budget:     bud,
 		Verifier:   a.verifier(account, creds, asker),
+		Captcha:    resolver,
+		Handoff:    handoff,
 		Capture:    handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
 		EntryCache: ws.CacheDir,
 		Timeout:    8 * time.Second,
@@ -146,6 +159,58 @@ func (a *App) verifier(account string, creds identity.Credentials, asker verify.
 		chain = append(chain, verify.NewCLI(os.Stdin, os.Stderr))
 	}
 	return chain
+}
+
+// captchaKit builds the CAPTCHA resolver (testmode + optional external gRPC/
+// subprocess plugin + vision) and the human-handoff escalation. The testmode
+// solver answers only the operator's own lab sitekeys.
+func (a *App) captchaKit(asker Asker, al audit.AuditLog, bud core.Budget) (captcha.Resolver, *captcha.HumanHandoff) {
+	solvers := []captcha.Solver{
+		solver.NewTestMode(map[string]string{"lab-sitekey": labToken, "block-sitekey": labToken, "": labToken}),
+	}
+	if path := strings.TrimSpace(os.Getenv("AGENTBROWSER_SOLVER_PLUGIN")); path != "" {
+		solvers = append(solvers, plugin.NewClient(path))
+	}
+	if a.Router != nil {
+		solvers = append(solvers, solver.NewVision(a.Router))
+	}
+	resolver := captcha.NewResolver(solvers, nil, captcha.NewCoreBudget(bud), 2, al)
+
+	var handoffAsker captcha.Asker = asker
+	if handoffAsker == nil {
+		handoffAsker = cliHandoff{}
+	}
+	h := captcha.NewHumanHandoff(handoffAsker)
+	h.Headful = !a.Cfg.Headless
+	return resolver, h
+}
+
+// labToken is the operator's own lab CAPTCHA test token (not a real solver).
+const labToken = "lab-captcha-ok"
+
+// cliHandoff prompts the operator to solve a challenge in the (headful) browser.
+type cliHandoff struct{}
+
+// AskHuman implements captcha.Asker for the CLI: it waits for the operator to
+// resolve the challenge in the browser and press Enter.
+func (cliHandoff) AskHuman(ctx context.Context, req captcha.HandoffRequest) error {
+	fmt.Fprintf(os.Stderr, "[human handoff] %s — solve the challenge in the browser", req.Reason)
+	if req.ViewURL != "" {
+		fmt.Fprintf(os.Stderr, " (%s)", req.ViewURL)
+	}
+	fmt.Fprint(os.Stderr, ", then press Enter: ")
+	done := make(chan struct{})
+	go func() {
+		var line string
+		_, _ = fmt.Fscanln(os.Stdin, &line)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return captcha.ErrHandoffTimeout
+	}
 }
 
 // ReadArtefactURI resolves an agentbrowser://artefacts/<account>/<file> URI to

@@ -130,7 +130,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL})
+	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL}, nil)
 	if res.Err != nil {
 		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")
 		fmt.Println(string(out))

@@ -60,6 +60,37 @@ func (p *prompter) Ask(ctx context.Context, pend Pending, surface func(*Pending)
 	}
 }
 
+// jobAsker bridges verify.Asker to a job's prompter, surfacing the pending
+// challenge on the job so get_job reports needs_verification / needs_human.
+type jobAsker struct {
+	m *JobManager
+	j *Job
+}
+
+// AskChallenge implements verify.Asker.
+func (a *jobAsker) AskChallenge(ctx context.Context, channel, account, hint string, deadline time.Time) (string, string, bool, error) {
+	id := fmt.Sprintf("chal-%d", time.Now().UnixNano())
+	pend := Pending{ChallengeID: id, Kind: "verification", Channel: channel, Hint: hint, ExpiresAt: deadline}
+	surface := func(p *Pending) {
+		a.m.mu.Lock()
+		defer a.m.mu.Unlock()
+		if p == nil {
+			if a.j.State == StateNeedsVerification || a.j.State == StateNeedsHuman {
+				a.j.State = StateRunning
+			}
+			a.j.Pending = nil
+			return
+		}
+		a.j.Pending = p
+		a.j.State = StateNeedsVerification
+	}
+	ans, err := a.j.prompt.Ask(ctx, pend, surface)
+	if err != nil {
+		return "", "", false, err
+	}
+	return ans.Code, ans.Link, ans.Approved, nil
+}
+
 // resolve delivers an answer to a waiting challenge.
 func (p *prompter) resolve(challengeID string, ans Answer) error {
 	p.mu.Lock()

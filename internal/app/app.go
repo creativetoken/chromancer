@@ -21,6 +21,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/model"
 	"github.com/creativetoken/chromancer/internal/model/provider"
 	"github.com/creativetoken/chromancer/internal/perceive"
+	"github.com/creativetoken/chromancer/internal/verify"
 )
 
 // App holds process-wide dependencies.
@@ -69,8 +70,10 @@ type AuthResult struct {
 	Reason string
 }
 
-// RunAuth launches a browser and runs the authenticator for one account.
-func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints) AuthResult {
+// RunAuth launches a browser and runs the authenticator for one account. asker
+// (may be nil) bridges verification to an MCP pending/answer surface; when nil
+// an interactive CLI prompt is used.
+func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, asker verify.Asker) AuthResult {
 	ws, err := a.Cfg.ForAccount(account)
 	if err != nil {
 		return AuthResult{Err: err, Reason: "flow_failed"}
@@ -79,6 +82,7 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	if err != nil {
 		return AuthResult{Err: fmt.Errorf("no credentials for account %q (use `creds put`): %w", account, err), Reason: "flow_failed"}
 	}
+	profile, _ := a.Creds.GetProfile(ctx, identity.AccountID(account))
 	target, _ := a.Creds.Target(ctx, identity.AccountID(account))
 	if target == "" {
 		return AuthResult{Err: fmt.Errorf("account %q has no target", account), Reason: "flow_failed"}
@@ -106,12 +110,13 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	defer b.Close()
 
 	authr := &auth.Authenticator{
-		Target: target, Account: account, Creds: creds,
+		Target: target, Account: account, Creds: creds, Profile: profile,
 		Perceiver: perceive.New(), Router: a.Router,
 		Sessions:   &auth.FileSessionStore{Path: ws.SessionEnc, Key: a.Key},
 		Writer:     &handback.FileWriter{Dir: ws.Artefacts, Account: account},
 		Audit:      al,
 		Budget:     bud,
+		Verifier:   a.verifier(account, creds, asker),
 		Capture:    handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
 		EntryCache: ws.CacheDir,
 		Timeout:    8 * time.Second,
@@ -121,6 +126,26 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 		return AuthResult{Err: err, Reason: auth.FailReason(err)}
 	}
 	return AuthResult{Result: res}
+}
+
+// verifier builds the verification chain for an account: built-in TOTP (from
+// the stored seed) first, then either the MCP ask-bridge (when asker != nil) or
+// an interactive CLI prompt, plus a webhook fallback.
+func (a *App) verifier(account string, creds identity.Credentials, asker verify.Asker) verify.Provider {
+	chain := verify.Chain{
+		verify.NewTOTP(func(acc string) string {
+			if acc == account {
+				return creds.TOTPSeed
+			}
+			return ""
+		}),
+	}
+	if asker != nil {
+		chain = append(chain, verify.NewAsk(asker))
+	} else {
+		chain = append(chain, verify.NewCLI(os.Stdin, os.Stderr))
+	}
+	return chain
 }
 
 // ReadArtefactURI resolves an agentbrowser://artefacts/<account>/<file> URI to

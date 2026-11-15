@@ -15,6 +15,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/identity"
 	"github.com/creativetoken/chromancer/internal/model"
 	"github.com/creativetoken/chromancer/internal/perceive"
+	"github.com/creativetoken/chromancer/internal/verify"
 )
 
 // Authenticator is the single owner of obtaining a session using
@@ -23,6 +24,7 @@ type Authenticator struct {
 	Target     string
 	Account    string
 	Creds      identity.Credentials
+	Profile    identity.Profile
 	Perceiver  perceive.Perceiver
 	Router     model.ModelRouter
 	Sessions   SessionStore
@@ -32,9 +34,12 @@ type Authenticator struct {
 	Capture    handback.CaptureWindow
 	EntryCache string
 	Handlers   []FlowHandler
+	Verifier   verify.Provider // optional; enables verification steps
+	MaxSteps   int             // post-submit resolution attempts (default 6)
 	Timeout    time.Duration
 
 	trace handback.Trace
+	base  Baseline
 }
 
 // Run authenticates (target, account) in the given mode and returns the
@@ -136,9 +141,18 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 		Trace: a.tracef, Timeout: a.Timeout,
 	})
 	if err != nil {
-		// SSO-only check: if the located page offers only SSO, fail fast.
-		if st, _, perr := a.Perceiver.Perceive(ctx, p); perr == nil && IsSSOOnly(st) {
-			return fmt.Errorf("%w", ErrSSOOnly)
+		// SSO-only check: visit the login hint / signup hint / root and, if any
+		// offers only third-party sign-in, fail fast with sso_only.
+		for _, u := range []string{hints.LoginURL, hints.SignupURL, root} {
+			if u == "" {
+				continue
+			}
+			if nerr := p.Navigate(ctx, u); nerr != nil {
+				continue
+			}
+			if st, _, perr := a.Perceiver.Perceive(ctx, p); perr == nil && IsSSOOnly(st) {
+				return fmt.Errorf("%w", ErrSSOOnly)
+			}
 		}
 		return fmt.Errorf("%w: %v", ErrEntryNotFound, err)
 	}
@@ -152,10 +166,15 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 	if IsSSOOnly(st) {
 		return fmt.Errorf("%w", ErrSSOOnly)
 	}
-	base := TakeBaseline(ctx, p)
+	a.base = TakeBaseline(ctx, p)
 
 	deps := FlowDeps{Page: p, Perceiver: a.Perceiver, Log: a.log, Trace: a.tracef, Timeout: a.Timeout}
-	handler := a.pickHandler(st)
+	var handler FlowHandler
+	if mode == Signup {
+		handler = SignupHandler{Profile: a.Profile}
+	} else {
+		handler = a.pickHandler(st)
+	}
 	if handler == nil {
 		return fmt.Errorf("%w: no handler for perceived form", ErrUnknownFlow)
 	}
@@ -164,27 +183,158 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 	if err := handler.Run(ctx, st, a.Creds, deps); err != nil {
 		return err
 	}
+	return a.resolve(ctx, p, rec, deps, mode)
+}
 
-	// Check success; allow the success detector to see captured XHRs.
-	st, _, err = a.Perceiver.Perceive(ctx, p)
-	if err != nil {
-		return fmt.Errorf("auth: perceive post-submit: %w", err)
+// resolve is the post-submit loop: success | verification | account-exists →
+// login | form-error recovery | SSO-only | stuck.
+func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode) error {
+	maxSteps := a.MaxSteps
+	if maxSteps == 0 {
+		maxSteps = 6
 	}
-	ok, ev := SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs())
-	if !ok {
-		// A short settle + one retry of perception (XHRs may still be landing).
+	formErrRetries := 0
+	verified := false
+	var since time.Time
+	actedHash := map[perceive.StateHash]int{}
+	for step := 0; step < maxSteps; step++ {
 		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
-		st, _, _ = a.Perceiver.Perceive(ctx, p)
-		ok, ev = SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs())
-	}
-	if !ok {
-		if f := Classify(st); f.HasAlert {
-			return fmt.Errorf("%w: form error: %s", ErrFlowFailed, f.AlertText)
+		st, hash, err := a.Perceiver.Perceive(ctx, p)
+		if err != nil {
+			return fmt.Errorf("auth: perceive: %w", err)
 		}
-		return fmt.Errorf("%w", ErrNotAuthenticated)
+		// Verification is checked first: a page asking for a code/link is never
+		// "done", even if the URL changed (a weak success signal).
+		if vs := DetectVerifyStep(st); vs.Needed {
+			if a.Verifier == nil {
+				return fmt.Errorf("%w: verification required (%s) but no provider configured", ErrFlowFailed, vs.Channel)
+			}
+			if err := a.doVerify(ctx, p, deps, vs, &since); err != nil {
+				return err
+			}
+			verified = true
+			continue
+		}
+		// Authenticated?
+		if ok, ev := (SuccessDetector{}).IsAuthenticated(ctx, p, st, a.base, rec.PostLoginXHRs()); ok {
+			a.trace.SuccessEvidence = ev
+			a.trace.Add("authenticated: %s", strings.Join(ev, ", "))
+			return nil
+		}
+		// Signup said the account already exists → switch to login.
+		if mode == Signup && !verified && IsAccountExists(st) {
+			a.trace.Add("signup: account exists → switching to login")
+			a.log("flow", map[string]any{"switch": "login", "reason": "account_exists"})
+			mode = Login
+		}
+		f := Classify(st)
+		switch {
+		case f.Password != nil:
+			if f.HasAlert && formErrRetries >= 2 {
+				return fmt.Errorf("%w: form error: %s", ErrFlowFailed, f.AlertText)
+			}
+			if actedHash[hash] >= 2 {
+				return fmt.Errorf("%w: form did not progress", ErrStuck)
+			}
+			actedHash[hash]++
+			// After a signup+verify, or when switched to login, submit login creds;
+			// otherwise (fresh signup) use the signup handler.
+			h := a.pickHandler(st)
+			if mode == Signup && !verified {
+				h = SignupHandler{Profile: a.Profile}
+			}
+			if f.HasAlert {
+				formErrRetries++
+				a.trace.Add("form error (%s) → recovering, retry %d", f.AlertText, formErrRetries)
+				a.log("flow", map[string]any{"recover": f.AlertText})
+			} else if verified {
+				a.trace.Add("post-verify login")
+			}
+			if err := h.Run(ctx, st, a.Creds, deps); err != nil {
+				return err
+			}
+		case verified || (mode == Signup):
+			// Verified a signup but no form here (e.g. "please log in") → go to login.
+			if actedHash[hash] >= 1 {
+				return fmt.Errorf("%w: no login form after verification", ErrStuck)
+			}
+			actedHash[hash]++
+			if err := a.gotoLogin(ctx, p); err != nil {
+				return err
+			}
+			mode = Login
+		case IsSSOOnly(st):
+			return fmt.Errorf("%w", ErrSSOOnly)
+		default:
+			return fmt.Errorf("%w: unexpected page with no actionable form", ErrStuck)
+		}
 	}
-	a.trace.SuccessEvidence = ev
-	a.trace.Add("authenticated: %s", strings.Join(ev, ", "))
+	return fmt.Errorf("%w: did not authenticate after %d steps", ErrStuck, maxSteps)
+}
+
+// doVerify fetches a code/link and applies it to the page.
+func (a *Authenticator) doVerify(ctx context.Context, p *browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time) error {
+	deadline := time.Now().Add(90 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	a.trace.Verification = append(a.trace.Verification, fmt.Sprintf("%s (%s)", vs.Channel, vs.Hint))
+	a.log("verification", map[string]any{"channel": string(vs.Channel), "hint": vs.Hint, "link_only": vs.LinkOnly})
+	vctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Hint: vs.Hint, Since: *since, Deadline: deadline})
+	if err != nil {
+		return fmt.Errorf("%w: verification: %v", ErrFlowFailed, err)
+	}
+	*since = time.Now()
+	ac := actor{deps}
+	switch res.Kind {
+	case verify.ResLink:
+		a.trace.Add("verification: opening magic link")
+		if err := p.Navigate(ctx, res.Link); err != nil {
+			return fmt.Errorf("auth: open magic link: %w", err)
+		}
+	case verify.ResCode:
+		if vs.CodeField == nil {
+			// Re-perceive to locate the code field.
+			st, _, _ := a.Perceiver.Perceive(ctx, p)
+			nv := DetectVerifyStep(st)
+			vs.CodeField, vs.Submit = nv.CodeField, nv.Submit
+		}
+		if vs.CodeField == nil {
+			return fmt.Errorf("%w: got a code but found no code field", ErrFlowFailed)
+		}
+		a.trace.Add("verification: entering code")
+		if err := ac.typeInto(ctx, vs.CodeField, res.Code, "otp"); err != nil {
+			return err
+		}
+		f := Classify(mustPerceive(ctx, a, p))
+		if err := ac.submit(ctx, Fields{Submit: vs.Submit}, vs.CodeField); err != nil && f.Submit != nil {
+			if err2 := ac.click(ctx, f.Submit, "verify"); err2 != nil {
+				return err2
+			}
+		}
+	case verify.ResApproved:
+		a.trace.Add("verification: push approved")
+	}
+	return p.WaitStable(ctx, browser.DefaultStableTimeout)
+}
+
+func mustPerceive(ctx context.Context, a *Authenticator, p *browser.Page) perceive.State {
+	st, _, _ := a.Perceiver.Perceive(ctx, p)
+	return st
+}
+
+// gotoLogin navigates to the login entrypoint (used when switching from signup).
+func (a *Authenticator) gotoLogin(ctx context.Context, p *browser.Page) error {
+	res := &entry.Resolver{CacheDir: a.EntryCache}
+	check := func(st perceive.State, m entry.Mode) (bool, string) { return IsAuthForm(st, Login) }
+	_, err := res.Resolve(ctx, a.Target, a.Target, entry.Mode(Login), nil, entry.Deps{
+		Page: p, Perceiver: a.Perceiver, Router: a.Router, Check: check, Trace: a.tracef, Timeout: a.Timeout,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: post-signup login entry: %v", ErrFlowFailed, err)
+	}
 	return nil
 }
 

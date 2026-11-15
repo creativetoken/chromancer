@@ -4,7 +4,21 @@
 > continue from **Next** without redoing finished work.
 
 ## Current milestone
-**M2 — Job-based MCP server** (complete)
+**M3 — Signup + verification** (verifying full e2e). M1, M2 complete + tagged.
+
+## M3 done
+- `verify` package: `Provider` interface + `Chain`; built-in **TOTP** (RFC 6238, no dep),
+  **CLI prompt**, **MCP ask-bridge** (`AskProvider` → job prompter), **webhook**, **lab inbox**.
+- `auth`: **signup flow handler** (operator profile / generated incidental fields; confirm-
+  password; terms checkbox), **verification-step detector** (email/sms/totp code + magic-link,
+  channel + masked hint), **account-exists → login**, and a **post-submit resolution loop**
+  (verify-before-success, form-error recovery with no-progress guard, SSO-only fast-fail,
+  signup→verify→login).
+- Verification wired through `app.RunAuth` (TOTP + CLI or MCP-ask chain) and the JobManager
+  (per-job `needs_verification` → `resolve_challenge`).
+- Lab apps: signup-verify, magic-link, otp-sms, totp, form-errors, sso-only.
+- e2e: all six M3 apps (CLI-style) + MCP async signup+OTP. Passing individually; full suite
+  running (task b0itg9ix7).
 
 ## Done
 - **Step 0 / 0.5 complete.** Scaffold, Makefile, CI, README, docs. Module

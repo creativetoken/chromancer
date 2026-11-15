@@ -10,6 +10,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/app"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/handback"
+	"github.com/creativetoken/chromancer/internal/verify"
 )
 
 // fakeRunner lets us drive job lifecycle without a browser.
@@ -23,7 +24,7 @@ type fakeRunner struct {
 	ctxErr  error // captured ctx.Err() at return
 }
 
-func (f *fakeRunner) RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints) app.AuthResult {
+func (f *fakeRunner) RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, _ verify.Asker) app.AuthResult {
 	f.mu.Lock()
 	f.started++
 	gate := f.gate

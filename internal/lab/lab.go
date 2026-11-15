@@ -341,5 +341,11 @@ func allApps() []App {
 		&spaJWTApp{},
 		&hiddenEntryApp{},
 		&boundSessionApp{},
+		&signupVerifyApp{},
+		&magicLinkApp{},
+		&otpSMSApp{},
+		&totpApp{},
+		&formErrorsApp{},
+		&ssoOnlyApp{},
 	}
 }

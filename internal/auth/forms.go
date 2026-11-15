@@ -295,10 +295,13 @@ func (MultiStepHandler) CanHandle(st perceive.State) bool {
 	return f.Password == nil && f.Identifier != nil
 }
 
-// Run implements FlowHandler.
+// Run implements FlowHandler. It does the initial identifier (and password, if
+// already shown) interaction and then hands back to the resolve loop, which
+// drives any further step — a password view, a verification step (e.g. a
+// magic-link email), or success.
 func (h MultiStepHandler) Run(ctx context.Context, st perceive.State, creds identity.Credentials, d FlowDeps) error {
 	a := actor{d}
-	for step := 1; step <= 3; step++ {
+	for step := 1; step <= 2; step++ {
 		f := Classify(st)
 		switch {
 		case f.Password != nil:
@@ -327,18 +330,17 @@ func (h MultiStepHandler) Run(ctx context.Context, st perceive.State, creds iden
 				return err
 			}
 		default:
-			return fmt.Errorf("%w: multistep step %d has no fields", ErrFlowFailed, step)
+			// No identifier/password field: a verification step or success page
+			// appeared (e.g. "check your email"). Let the resolve loop handle it.
+			return nil
 		}
 		var err error
 		st, _, err = d.Perceiver.Perceive(ctx, d.Page)
 		if err != nil {
 			return err
 		}
-		if nf := Classify(st); nf.HasAlert && nf.Password == nil {
-			return fmt.Errorf("%w: %s", ErrFlowFailed, nf.AlertText)
-		}
 	}
-	return fmt.Errorf("%w: multistep did not reach a password step", ErrFlowFailed)
+	return nil
 }
 
 // DefaultHandlers is the ordered handler set tried against a perceived form.

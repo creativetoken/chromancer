@@ -12,6 +12,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/app"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/handback"
+	"github.com/creativetoken/chromancer/internal/verify"
 )
 
 // JobState is the polled status of an auth job.
@@ -65,9 +66,10 @@ type Job struct {
 }
 
 // Runner performs the actual authentication and session export. *app.App
-// satisfies it; tests use a fake.
+// satisfies it; tests use a fake. asker (may be nil) bridges verification to
+// the MCP pending/answer surface for this job.
 type Runner interface {
-	RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints) app.AuthResult
+	RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, asker verify.Asker) app.AuthResult
 	ExportSession(ctx context.Context, account string) (handback.ArtefactRef, handback.SessionBundle, error)
 }
 
@@ -123,7 +125,7 @@ func (m *JobManager) StartAuth(parent context.Context, account string, mode auth
 
 func (m *JobManager) run(ctx context.Context, j *Job, mode auth.Mode, hints auth.Hints) {
 	defer close(j.doneCh)
-	res := m.runner.RunAuth(ctx, j.Account, mode, hints)
+	res := m.runner.RunAuth(ctx, j.Account, mode, hints, &jobAsker{m: m, j: j})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()

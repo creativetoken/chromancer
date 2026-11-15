@@ -25,6 +25,7 @@ const (
 type Request struct {
 	Channel  Channel
 	Account  string
+	Target   string // app/site the login is for (used to pick a per-target TOTP seed)
 	Hint     string // "code sent to ***1234"
 	Since    time.Time
 	Deadline time.Time

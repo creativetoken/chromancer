@@ -113,3 +113,13 @@
   env prefix to `CHROMANCER_` (breaking for anyone with scripts/`AGENTBROWSER_KEY` set). Option
   B: rename the module to `agentbrowser` (breaks import paths). Not done in this task; the README
   states the relationship in one line. Decide before a wider release.
+
+### Verification module (V1–V5)
+- 2026-11-15 · **Twilio SMS via plain REST, not the twilio-go SDK** · the one call needed (list
+  inbound Messages) is a single authenticated GET; pulling the SDK + its deps in for that is not
+  justified · the REST client is ~1 file, fully testable against an httptest mock, and keeps the
+  dependency set small.
+- 2026-11-15 · **Date filtering is client-side, not a server `DateSent>` query param** · Twilio's
+  date-range query encoding is fiddly and easy to get subtly wrong; fetching the recent page and
+  filtering by parsed `date_sent >= since - skew` is simpler and robust · alt: server-side range
+  (brittle across API/SDK versions).

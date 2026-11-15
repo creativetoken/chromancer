@@ -150,7 +150,7 @@ func (s State) Find(h int) (Node, bool) {
 	return Node{}, false
 }
 
-var idRe = regexp.MustCompile(`/(\d+|[0-9a-fA-F-]{8,})(?=/|$)`)
+var idRe = regexp.MustCompile(`/(\d+|[0-9a-fA-F-]{8,})(/|$)`)
 
 // PathTemplate collapses numeric / uuid-ish path segments to {id}.
 func PathTemplate(u string) string {
@@ -160,7 +160,7 @@ func PathTemplate(u string) string {
 	if j := strings.IndexAny(u, "?#"); j >= 0 {
 		u = u[:j]
 	}
-	return idRe.ReplaceAllString(u, "/{id}")
+	return idRe.ReplaceAllString(u, "/{id}$2")
 }
 
 // Signature is the structural signature used for hashing: path template +

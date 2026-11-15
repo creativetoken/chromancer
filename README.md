@@ -1,197 +1,119 @@
-# chromancer (agentbrowser)
+# chromancer
 
-An **agent-driven browser** that gets authenticated and hands the session back. It signs up or
-logs in to a web app with **operator-provided credentials**, handles verification/2FA and
-CAPTCHAs (escalating to a human when blocked), then returns a **reusable session bundle** and an
-**auth-flow recording**. Model-agnostic, Go, deterministic-first. Exposed as a **CLI** and a
-**job-based MCP server**. Phase 2 adds an **authenticated crawl**.
+chromancer logs into a website for you with credentials you supply, deals with
+2FA and CAPTCHAs on the way in, and hands back the cookies and tokens so your own
+code can keep using the session. The command is called `agentbrowser`.
 
-The approved design is `docs/ARCHITECTURE.md`. Build status / how to resume is in
-`docs/PROGRESS.md`; autonomous decisions are in `docs/DECISIONS.md`.
+## What it does
 
-## Install
+- Logs in or signs up with a username and password you provide.
+- Fills in 2FA codes: it generates TOTP codes from a seed, or asks you (or your tool) for a code sent by email or SMS.
+- Solves common CAPTCHAs automatically and falls back to a human only when it has to.
+- Hands back a session bundle: cookies, storage, auth headers and token expiry you can replay without a browser.
+- Saves the whole login as a HAR file so you can see what happened.
+- Crawls the app once it is logged in (an optional second phase).
+- Runs as a CLI, or as an MCP server for an agent to drive.
 
-Prerequisites: **Go 1.27+** and **Google Chrome / Chromium** (go-rod downloads a browser if none
-is found).
+## Requirements
 
-```sh
-go install golang.org/x/tools/cmd/goimports@latest   # for `make lint`
-make build
-```
+Go 1.27 or newer, and Google Chrome or Chromium. If neither browser is
+installed, go-rod downloads one on first run.
 
 ## Quick start
 
+Build the command, generate a key, and start the test lab in the background:
+
 ```sh
-export AGENTBROWSER_KEY=$(go run ./cmd/agentbrowser newkey)   # credential/session encryption key
+go build -o bin/agentbrowser ./cmd/agentbrowser
+export AGENTBROWSER_KEY=$(bin/agentbrowser newkey)
+make lab &   # mock apps on http://127.0.0.1:8089
+```
 
-# run the offline mock-app lab (the e2e + demo target)
-make lab                                        # serves on 127.0.0.1:8089
+Store credentials, log in, and print the session:
 
-# store operator credentials, then authenticate and hand back a session
-go run ./cmd/agentbrowser creds put --target http://127.0.0.1:8089/simple/ --account alice \
-    --username alice@example.com --password 'correct horse'
-go run ./cmd/agentbrowser auth --account alice --mode login \
-    --login-url http://127.0.0.1:8089/simple/login
-go run ./cmd/agentbrowser export-session --account alice
+```sh
+bin/agentbrowser creds put --target http://127.0.0.1:8089/simple/ \
+  --account alice --username alice@example.com --password 'correct horse'
+bin/agentbrowser auth --account alice --login-url http://127.0.0.1:8089/simple/login
+bin/agentbrowser export-session --account alice
+```
 
-# Phase 2: crawl the authenticated app
-go run ./cmd/agentbrowser crawl --account alice
+`auth` looks up the target from the stored credentials, so you pass `--target` once, to `creds put`. The password above is the lab's test password.
+
+## Usage
+
+Store credentials for an account (add `--totp-seed` for TOTP 2FA):
+
+```sh
+agentbrowser creds put --target URL --account NAME --username U --password P
+```
+
+Log in. Use `--mode signup` to register, and `--headful` to watch the browser:
+
+```sh
+agentbrowser auth --account NAME --login-url URL
+```
+
+Print the saved session, or the full bundle with `--bundle`:
+
+```sh
+agentbrowser export-session --account NAME
+```
+
+Crawl the app once logged in, or run the MCP server for an agent to drive:
+
+```sh
+agentbrowser crawl --account NAME
+agentbrowser mcp
 ```
 
 ## Configuration
 
-Everything is flags + environment; there is no required config file.
+Everything is flags and environment variables; there is no config file.
 
-| Env | Meaning |
+| Variable | Meaning |
 |---|---|
-| `AGENTBROWSER_KEY` | **required** — base64 of 32 random bytes; encrypts creds + sessions. `agentbrowser newkey` prints one. |
-| `AGENTBROWSER_WORKSPACE` | per-account workspace dir (default `.workspace`). |
-| `AGENTBROWSER_HEADFUL=1` | run Chrome with a visible window (needed for in-person human handoff). |
-| `AGENTBROWSER_PROXY` | optional upstream proxy URL for the browser (operator's harness). |
-| `AGENTBROWSER_CHROME` | explicit Chrome/Chromium binary path. |
-| `AGENTBROWSER_LLM` | `mock` (default when no key), `openai`, `anthropic`, `gemini`. |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI-compatible endpoint (also Ollama/vLLM). |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` · `GEMINI_API_KEY` / `GEMINI_MODEL` | real providers. |
-| `AGENTBROWSER_SOLVER_PLUGIN` | path to an out-of-process CAPTCHA solver plugin binary. |
+| `AGENTBROWSER_KEY` | Required. base64 of 32 random bytes; encrypts stored credentials and sessions. `agentbrowser newkey` prints one. |
+| `AGENTBROWSER_WORKSPACE` | Where accounts and saved files live (default `.workspace`). |
+| `AGENTBROWSER_HEADFUL` | Set to `1` to show the browser window. |
+| `AGENTBROWSER_PROXY` | Upstream proxy URL for the browser. |
+| `AGENTBROWSER_CHROME` | Path to a specific Chrome or Chromium binary. |
+| `AGENTBROWSER_LLM` | Model provider: `mock` (default), `openai`, `anthropic`, `gemini`. |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Turn on a real model (with its matching `_MODEL` and optional `_BASE_URL`). |
+| `AGENTBROWSER_SOLVER_PLUGIN` | Path to an external CAPTCHA solver plugin. |
+| `AGENTBROWSER_CAPTCHA_CONFIG` | Path to a YAML file that sets the solver chain. |
 
-Deterministic skills drive the common path; an LLM is only a judgment fallback (e.g. entrypoint
-discovery), so **everything works offline with the mock model**. Real providers are used only
-when their key is set.
+A model is only a fallback for when the built-in rules cannot find the login form, so with no key set everything still works offline against the lab.
 
-## CLI
+## MCP
 
-```
-agentbrowser creds put --target URL --account NAME --username U --password P [--totp-seed S]
-agentbrowser auth  --account NAME --mode login|signup [--login-url URL] [--signup-url URL] [--headful]
-agentbrowser export-session --account NAME [--bundle]
-agentbrowser crawl --account NAME [--headful]
-agentbrowser eval  [--runs N]        # benchmark the configured model against the lab
-agentbrowser mcp                     # run the MCP server over stdio
-agentbrowser newkey
-```
+`agentbrowser mcp` speaks the Model Context Protocol over stdin and stdout, with
+these tools:
 
-`agentbrowser eval --captcha` benchmarks the **CAPTCHA solver chain** against the mock vendor apps
-(`mock-recaptcha-v2/-invisible/-v3`, `mock-hcaptcha`, `mock-turnstile-managed/-invisible`,
-`text-captcha`, `image-grid`, …), printing per-`(vendor × solver)` solve rate, latency and cost.
-See `docs/CAPTCHA.md` for the chain, config and how to add a vendor.
+- `start_auth` and `start_crawl` begin a job and return a job id.
+- `get_job` reports progress, or asks for a verification code or a human.
+- `resolve_challenge` answers a verification or human-handoff request.
+- `cancel_job` stops a job, and `export_session` returns the saved session.
 
-`agentbrowser eval` benchmarks the configured model against every lab auth scenario. Example
-(mock model, 1 run each):
-
-```
-SCENARIO                   MODEL       OK%   avg_ms   steps   tokens   cost_usd
-bound-session/login        mock       100%    14946     4.0        0     0.0000
-captcha-mock/login         mock       100%    14845     4.0        0     0.0000
-form-errors/login          mock       100%    16804     6.0        0     0.0000
-hidden-entry/login         mock       100%    14848     4.0        0     0.0000
-iframe/login               mock       100%    14551     3.0        0     0.0000
-modal/login                mock       100%    15536     4.0        0     0.0000
-multistep/login            mock       100%    16584     5.0        0     0.0000
-otp-sms/login              mock       100%    16621     5.0        0     0.0000
-signup-verify/signup       mock       100%    16719     5.0        0     0.0000
-simple/login               mock       100%    15618     4.0        0     0.0000
-spa-jwt/login              mock       100%    15146     3.0        0     0.0000
-totp/login                 mock       100%    16650     5.0        0     0.0000
-```
-
-(tokens/cost are 0 for the mock model; real numbers appear when `AGENTBROWSER_LLM` points at a
-real provider and the LLM judgment fallback is exercised.)
-
-`auth` prints `done{bundle_ref, recording_ref, trace}` or `failed{reason}` (reasons:
-`sso_only`, `handoff_timeout`, `verification_timeout`, `flow_failed`, …). Artefacts are written
-to the per-account workspace and returned **by reference**, never inline.
-
-## MCP server
-
-`agentbrowser mcp` speaks the Model Context Protocol over stdio (line-delimited JSON-RPC 2.0).
-Tools:
-
-- `start_auth(target, account, mode, login_url?, signup_url?)` → `{job_id}`
-- `start_crawl(account)` → `{job_id}`
-- `get_job(job_id)` → `running | needs_verification{challenge_id, channel, hint, expires_at} |
-  needs_human{challenge_id, view_url, reason} | done{...} | failed{reason}`
-- `resolve_challenge(job_id, challenge_id, code|link|approved|done)` — answers verification **and**
-  human-handoff challenges (one verb)
-- `cancel_job(job_id)`, `export_session(account)`
-
-Artefacts (bundle, recording) are MCP **resources**; read them with `resources/read` on the
-`*_ref.uri`. A **per-account lock** serialises operations on one account.
-
-## Writing a CAPTCHA solver plugin
-
-A solver only solves — it never touches the browser (the core applies the result via a per-vendor
-Injector). Implement `captcha.Solver` and serve it over stdio with `plugin.Serve`:
-
-```go
-package main
-
-import (
-    "context"; "os"
-    "github.com/creativetoken/chromancer/internal/captcha"
-    "github.com/creativetoken/chromancer/internal/captcha/plugin"
-)
-
-type mySolver struct{}
-func (mySolver) Name() string { return "my-solver" }
-func (mySolver) Describe() captcha.Capabilities {
-    return captcha.Capabilities{Vendors: []captcha.Vendor{captcha.VendorRecaptchaV2}, Kinds: []captcha.Kind{captcha.KindInteractive}}
-}
-func (mySolver) Solve(ctx context.Context, c captcha.Challenge) (captcha.Result, error) {
-    return captcha.Result{Kind: captcha.ResultToken, Token: "..."}, nil
-}
-func (mySolver) Report(ctx context.Context, solveID string, accepted bool) error { return nil }
-
-func main() { _ = plugin.Serve(mySolver{}, os.Stdin, os.Stdout) }
-```
-
-Build it and point `AGENTBROWSER_SOLVER_PLUGIN` at the binary. The normative wire contract is
-`internal/captcha/plugin/proto/solver.proto`; the Go transport mirrors it (see `docs/DECISIONS.md`
-for why the reference transport is stdio-JSON rather than gRPC). Every plugin must pass
-`plugin.Conform`.
-
-## Writing a VerificationProvider
-
-Implement `verify.Provider` to source codes/links/approvals (the agent asks; your tool answers):
-
-```go
-type Provider interface {
-    Supports(ch verify.Channel, account string) bool
-    GetCode(ctx context.Context, req verify.Request) (verify.Result, error) // Code | Link | Approved
-    Resend(ctx context.Context, req verify.Request) error
-}
-```
-
-Built-ins: `TOTP` (local, from a seed), `CLI` (prompt), `Webhook`, `Ask` (MCP pending/answer),
-and `LabInbox` (tests). `verify.Chain` tries providers in order by channel.
-
-## Security notes on artefacts
-
-The **SessionBundle** (cookies, storage, observed `Authorization`/CSRF headers, token expiry) and
-the **AuthRecording** (HAR-style request/response of the auth flow + a bounded post-login window,
-**bodies included, secrets flagged**) contain live credentials/tokens. They are:
-
-- returned **only to the authenticated caller**, as file paths / MCP resource URIs (never inline);
-- written only inside the per-account workspace (files are `0600`);
-- **redacted before every audit-log write** — the audit log (hash-chained, tamper-evident) never
-  contains plaintext passwords or tokens.
-
-Credentials and saved sessions are encrypted at rest (NaCl secretbox; key from `AGENTBROWSER_KEY`).
-The `replayable` flag on a bundle tells a consumer whether a plain-HTTP replay works or a browser
-is still required (e.g. JS-computed per-request headers, IP-bound tokens).
-
-## Testing
+## Development
 
 ```sh
-make test     # unit tests (mock LLM, no browser), -race
-make e2e      # browser e2e vs the lab (AGENTBROWSER_E2E=1; needs Chrome)
-make lint     # gofmt / goimports / vet
+make test   # vet and unit tests, with the race detector
+make lint   # gofmt, goimports, vet
+make lab    # run the mock-app lab
+make e2e    # browser tests against the lab (needs Chrome)
 ```
 
-No real third-party sites, paid services or secrets are used in tests. Real LLM providers and
-external CAPTCHA solvers are exercised only when their env vars are set.
+`agentbrowser eval` benchmarks the login flow against the lab; add `--captcha` to
+benchmark the CAPTCHA solver chain.
 
-## Layout
+## Security
 
-`cmd/agentbrowser` (CLI/MCP), `cmd/authlab` (lab), `cmd/mocksolver` (sample plugin),
-`internal/{server,core,skills,perceive,browser,model,auth,verify,captcha,handback,identity,
-audit,config,explore,eval,lab}`. See `docs/ARCHITECTURE.md` §10.
+A session bundle and the login recording contain live credentials and tokens. They are written only inside the workspace, encrypted at rest, and never written to the audit log.
+
+## Further reading
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how it works inside.
+- [docs/CAPTCHA.md](docs/CAPTCHA.md): CAPTCHA detection and the solver chain.
+- [docs/VERIFICATION.md](docs/VERIFICATION.md): where 2FA codes come from.
+- [docs/PLUGINS.md](docs/PLUGINS.md): writing a solver plugin or a verification provider.

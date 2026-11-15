@@ -105,3 +105,11 @@
   pure-Go fixture parsing for fast detector unit tests, and the operator-facing YAML chain config;
   both pinned to keep `x/crypto` at v0.59.0 · alt: browser-only detection tests (slow) and JSON-only
   config (spec asks for YAML).
+
+### Proposals (not yet done)
+- 2026-11-15 · **PROPOSAL: align the names** · the repo/module is `chromancer` but the binary,
+  env vars and MCP server are `agentbrowser`. Two names for one thing is a small ongoing
+  papercut (docs, support, muscle memory). Option A: rename the binary to `chromancer` and the
+  env prefix to `CHROMANCER_` (breaking for anyone with scripts/`AGENTBROWSER_KEY` set). Option
+  B: rename the module to `agentbrowser` (breaks import paths). Not done in this task; the README
+  states the relationship in one line. Decide before a wider release.

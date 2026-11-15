@@ -171,16 +171,22 @@ func (a *App) verifier(account string, creds identity.Credentials, asker verify.
 // subprocess plugin + vision) and the human-handoff escalation. The testmode
 // solver answers only the operator's own lab sitekeys.
 func (a *App) captchaKit(asker Asker, al audit.AuditLog, bud core.Budget) (captcha.Resolver, *captcha.HumanHandoff) {
+	// Chain order: testmode (vendor test keys + lab tokens) → native (let the
+	// real browser complete it) → vision (image/text) → external plugin → human.
 	solvers := []captcha.Solver{
-		solver.NewTestMode(map[string]string{"lab-sitekey": labToken, "block-sitekey": labToken, "": labToken}),
-	}
-	if path := strings.TrimSpace(os.Getenv("AGENTBROWSER_SOLVER_PLUGIN")); path != "" {
-		solvers = append(solvers, plugin.NewClient(path))
+		solver.NewTestMode(
+			map[string]string{"lab-sitekey": labToken, "block-sitekey": labToken, "": labToken},
+			captcha.VendorMock, captcha.VendorRecaptchaV2, captcha.VendorRecaptchaV3, captcha.VendorHCaptcha, captcha.VendorTurnstile,
+		),
+		solver.NewNative(),
 	}
 	if a.Router != nil {
 		solvers = append(solvers, solver.NewVision(a.Router))
 	}
-	resolver := captcha.NewResolver(solvers, nil, captcha.NewCoreBudget(bud), 2, al)
+	if path := strings.TrimSpace(os.Getenv("AGENTBROWSER_SOLVER_PLUGIN")); path != "" {
+		solvers = append(solvers, plugin.NewClient(path))
+	}
+	resolver := captcha.NewResolver(solvers, nil, captcha.NewCoreBudget(bud), 5, al)
 
 	var handoffAsker captcha.Asker = asker
 	if handoffAsker == nil {

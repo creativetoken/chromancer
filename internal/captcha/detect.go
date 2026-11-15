@@ -42,6 +42,10 @@ type widgetHit struct {
 	DataS      string `json:"data_s"`
 	RQData     string `json:"rqdata"`
 	CData      string `json:"cdata"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+	W          int    `json:"w"`
+	H          int    `json:"h"`
 }
 
 // imageHit is a candidate image/text CAPTCHA (no vendor widget).
@@ -85,19 +89,20 @@ const probeJS = `() => {
   const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src).filter(Boolean);
   const widgets = [];
   const resp = (v) => v==='hcaptcha' ? 'textarea[name="h-captcha-response"]' : v==='turnstile' ? 'input[name="cf-turnstile-response"]' : v==='mock' ? 'input[name="captcha-token"], [data-captcha-token]' : 'textarea[name="g-recaptcha-response"], #g-recaptcha-response';
-  const addW = (vendor, el) => widgets.push({
+  const addW = (vendor, el) => { const r = el.getBoundingClientRect(); widgets.push({
     vendor, sitekey: el.getAttribute('data-sitekey')||el.getAttribute('data-site-key')||'',
     field_sel: resp(vendor), visible: shown(el),
     size: el.getAttribute('data-size')||'', callback: el.getAttribute('data-callback')||'',
     action: el.getAttribute('data-action')||'', enterprise: false,
-    data_s: el.getAttribute('data-s')||'', rqdata: el.getAttribute('data-rqdata')||'', cdata: el.getAttribute('data-cdata')||''
-  });
+    data_s: el.getAttribute('data-s')||'', rqdata: el.getAttribute('data-rqdata')||'', cdata: el.getAttribute('data-cdata')||'',
+    x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)
+  }); };
   document.querySelectorAll('.g-recaptcha:not(.grecaptcha-badge), div[data-sitekey].recaptcha, #g-recaptcha').forEach(el => addW('recaptcha_v2', el));
   document.querySelectorAll('.h-captcha').forEach(el => addW('hcaptcha', el));
   document.querySelectorAll('.cf-turnstile').forEach(el => addW('turnstile', el));
   document.querySelectorAll('.lab-captcha, [data-lab-captcha]').forEach(el => addW('mock', el));
   // Actively shown challenge popup = real interactive block even without a container.
-  const addPopup = (vendor, f) => { if (shown(f)) widgets.push({vendor, sitekey:'', field_sel: resp(vendor), visible:true, size:'', callback:'', action:'', enterprise:false, data_s:'', rqdata:'', cdata:''}); };
+  const addPopup = (vendor, f) => { if (shown(f)) { const r=f.getBoundingClientRect(); widgets.push({vendor, sitekey:'', field_sel: resp(vendor), visible:true, size:'', callback:'', action:'', enterprise:false, data_s:'', rqdata:'', cdata:'', x:Math.round(r.left), y:Math.round(r.top), w:Math.round(r.width), h:Math.round(r.height)}); } };
   document.querySelectorAll('iframe[src*="api2/bframe"]').forEach(f => addPopup('recaptcha_v2', f));
   document.querySelectorAll('iframe[src*="hcaptcha.com"]').forEach(f => { if (/frame=challenge/.test(f.src)) addPopup('hcaptcha', f); });
   // Parse grecaptcha(.enterprise).execute(sitekey,{action}) from inline scripts.
@@ -408,6 +413,9 @@ func classify(pr domProbe, origin string) (Challenge, bool) {
 		}
 		v := vendorOf(w.Vendor)
 		ch := Challenge{Vendor: v, Kind: KindInteractive, SiteKey: w.SiteKey, PageURL: origin, fieldSel: w.FieldSel, Params: widgetParams(w)}
+		if w.W > 0 && w.H > 0 {
+			ch.Rect = &RegionClick{X: w.X, Y: w.Y, W: w.W, H: w.H}
+		}
 		return ch, true
 	}
 

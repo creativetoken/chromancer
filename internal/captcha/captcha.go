@@ -46,8 +46,18 @@ type Challenge struct {
 	PageURL  string            `json:"page_url"`
 	Image    []byte            `json:"image,omitempty"`
 	Params   map[string]string `json:"params,omitempty"`
+	Rect     *RegionClick      `json:"rect,omitempty"` // visible widget bounds (native's click target)
 	fieldSel string            // internal: the response-field selector the injector targets
+
+	// FieldSel exposes the response-field selector to in-process solvers/core
+	// that need it (set via SetFieldSel).
 }
+
+// FieldSelector returns the response/answer field selector the injector targets.
+func (c Challenge) FieldSelector() string { return c.fieldSel }
+
+// SetFieldSel sets the response/answer field selector (used by detection/tests).
+func (c *Challenge) SetFieldSel(sel string) { c.fieldSel = sel }
 
 // ResultKind discriminates the typed solve result.
 type ResultKind int

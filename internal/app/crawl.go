@@ -78,7 +78,7 @@ func (a *App) RunCrawl(ctx context.Context, account string, asker Asker) CrawlRe
 	}
 
 	// Authenticator reused for mid-crawl re-login on the SAME browser.
-	resolver, handoff := a.captchaKit(asker, al, bud)
+	resolver, handoff := a.captchaKit(asker, al, bud, target)
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds,
 		Perceiver: perceive.New(), Router: a.Router,

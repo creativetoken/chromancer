@@ -1,0 +1,17 @@
+# CAPTCHA solver chain configuration (point AGENTBROWSER_CAPTCHA_CONFIG at this).
+# Every automated solver is tried in order; the human handoff is always the last
+# resort and cannot be removed.
+captcha:
+  chain: [testmode, native, vision, external, human]
+  max_solves: 5           # cap on solve attempts per challenge
+  max_cost: 0.50          # cap on external solver spend (USD)
+  timeout_per_solver: 90s # per-solver Solve timeout
+  adaptive_order: false   # if true, reorder solvers by observed success rate
+  external:
+    - name: generic
+      path: ./bin/captcha-generic        # built from plugins/captcha-generic
+      endpoint: ${SOLVER_ENDPOINT}       # the plugin reads SOLVER_ENDPOINT from env
+      api_key_env: SOLVER_API_KEY        # env var holding the service API key
+      vendors: [recaptcha_v2, recaptcha_v3, hcaptcha, turnstile]
+      needs_proxy: true                  # bind the token to the caller's IP/UA
+      price_usd: 0.002

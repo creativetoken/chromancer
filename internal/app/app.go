@@ -125,7 +125,7 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	}
 	defer b.Close()
 
-	resolver, handoff := a.captchaKit(asker, al, bud)
+	resolver, handoff := a.captchaKit(asker, al, bud, target)
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,
 		Perceiver: perceive.New(), Router: a.Router,
@@ -170,24 +170,45 @@ func (a *App) verifier(account string, creds identity.Credentials, asker verify.
 // captchaKit builds the CAPTCHA resolver (testmode + optional external gRPC/
 // subprocess plugin + vision) and the human-handoff escalation. The testmode
 // solver answers only the operator's own lab sitekeys.
-func (a *App) captchaKit(asker Asker, al audit.AuditLog, bud core.Budget) (captcha.Resolver, *captcha.HumanHandoff) {
-	// Chain order: testmode (vendor test keys + lab tokens) → native (let the
-	// real browser complete it) → vision (image/text) → external plugin → human.
-	solvers := []captcha.Solver{
-		solver.NewTestMode(
+func (a *App) captchaKit(asker Asker, al audit.AuditLog, bud core.Budget, target string) (captcha.Resolver, *captcha.HumanHandoff) {
+	// Chain order and limits come from an optional YAML config; the default
+	// chain is testmode → native → vision → external → human (human always last).
+	cfg, _ := captcha.LoadChainConfig(os.Getenv("AGENTBROWSER_CAPTCHA_CONFIG"))
+
+	var solvers []captcha.Solver
+	if cfg.Has("testmode") {
+		solvers = append(solvers, solver.NewTestMode(
 			map[string]string{"lab-sitekey": labToken, "block-sitekey": labToken, "": labToken},
 			captcha.VendorMock, captcha.VendorRecaptchaV2, captcha.VendorRecaptchaV3, captcha.VendorHCaptcha, captcha.VendorTurnstile,
-		),
-		solver.NewNative(),
+		))
 	}
-	if a.Router != nil {
+	if cfg.Has("native") {
+		solvers = append(solvers, solver.NewNative())
+	}
+	if cfg.Has("vision") && a.Router != nil {
 		solvers = append(solvers, solver.NewVision(a.Router))
 	}
-	if path := strings.TrimSpace(os.Getenv("AGENTBROWSER_SOLVER_PLUGIN")); path != "" {
-		solvers = append(solvers, plugin.NewClient(path))
+	if cfg.Has("external") {
+		for _, ex := range cfg.External {
+			if ex.Path != "" {
+				solvers = append(solvers, plugin.NewClient(ex.Path))
+			}
+		}
+		if path := strings.TrimSpace(os.Getenv("AGENTBROWSER_SOLVER_PLUGIN")); path != "" {
+			solvers = append(solvers, plugin.NewClient(path))
+		}
 	}
-	resolver := captcha.NewResolver(solvers, nil, captcha.NewCoreBudget(bud), 5, al)
 
+	stats, _ := captcha.LoadStats(filepath.Join(a.Cfg.Workspace, "captcha-stats.json"))
+	opts := []captcha.ResolverOption{
+		captcha.WithStats(stats, target),
+		captcha.WithAdaptiveOrder(cfg.AdaptiveOrder),
+		captcha.WithClientHints(a.Cfg.UserAgent, a.Cfg.ProxyURL),
+		captcha.WithSolverTimeout(cfg.TimeoutPerSolver),
+	}
+	resolver := captcha.NewResolver(solvers, nil, captcha.NewCoreBudget(bud), cfg.MaxSolves, al, opts...)
+
+	// Human handoff is always the final fallback, regardless of chain config.
 	var handoffAsker captcha.Asker = asker
 	if handoffAsker == nil {
 		handoffAsker = cliHandoff{}

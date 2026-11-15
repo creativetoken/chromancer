@@ -21,15 +21,18 @@ type solverEntry struct {
 // For a given challenge instance it advances through the eligible solvers; on
 // rejection the flow handler re-detects a fresh challenge before retrying.
 type chainResolver struct {
-	entries    []solverEntry
-	injectors  map[Vendor]Injector
-	budget     Budget
-	maxSolves  int
-	audit      audit.AuditLog
-	nativeWait time.Duration // how long to wait for a native click to fill the field
-	stats      *Stats        // optional per-(target,vendor,solver) stats
-	target     string        // label for stats keys
-	adaptive   bool          // reorder eligible solvers by observed success rate
+	entries       []solverEntry
+	injectors     map[Vendor]Injector
+	budget        Budget
+	maxSolves     int
+	audit         audit.AuditLog
+	nativeWait    time.Duration // how long to wait for a native click to fill the field
+	stats         *Stats        // optional per-(target,vendor,solver) stats
+	target        string        // label for stats keys
+	adaptive      bool          // reorder eligible solvers by observed success rate
+	ua            string        // browser UA, forwarded to NeedsProxy solvers
+	proxy         string        // upstream proxy, forwarded to NeedsProxy solvers
+	solverTimeout time.Duration // per-solver Solve timeout (0 = none)
 
 	mu       sync.Mutex
 	tried    map[string]int    // vendor+sitekey -> count of solvers tried
@@ -54,6 +57,17 @@ func WithAdaptiveOrder(on bool) ResolverOption {
 // WithNativeWait sets how long to wait for a native click to fill the field.
 func WithNativeWait(d time.Duration) ResolverOption {
 	return func(r *chainResolver) { r.nativeWait = d }
+}
+
+// WithClientHints forwards the browser UA and upstream proxy to solvers that
+// declare NeedsProxy (external services bind tokens to IP/UA).
+func WithClientHints(ua, proxy string) ResolverOption {
+	return func(r *chainResolver) { r.ua = ua; r.proxy = proxy }
+}
+
+// WithSolverTimeout bounds each solver's Solve call.
+func WithSolverTimeout(d time.Duration) ResolverOption {
+	return func(r *chainResolver) { r.solverTimeout = d }
 }
 
 // NewResolver builds a chainResolver. Describe() is called once per solver here.
@@ -139,8 +153,26 @@ func (r *chainResolver) Resolve(ctx context.Context, p *browser.Page, c Challeng
 			return Result{}, err
 		}
 	}
+	// Forward client hints to external solvers that bind tokens to IP/UA.
+	if entry.caps.NeedsProxy && (r.ua != "" || r.proxy != "") {
+		if c.Params == nil {
+			c.Params = map[string]string{}
+		}
+		if r.ua != "" {
+			c.Params[ParamUserAgent] = r.ua
+		}
+		if r.proxy != "" {
+			c.Params[ParamProxy] = r.proxy
+		}
+	}
+	sctx := ctx
+	if r.solverTimeout > 0 {
+		var cancel context.CancelFunc
+		sctx, cancel = context.WithTimeout(ctx, r.solverTimeout)
+		defer cancel()
+	}
 	t0 := time.Now()
-	res, err := entry.s.Solve(ctx, c)
+	res, err := entry.s.Solve(sctx, c)
 	latency := time.Since(t0).Milliseconds()
 	if err != nil {
 		r.logf("captcha_solve", map[string]any{"solver": entry.s.Name(), "vendor": string(c.Vendor), "error": err.Error()})

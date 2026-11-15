@@ -27,6 +27,8 @@ const (
 	ParamImgSel     = "img_sel"    // image/text-captcha image selector
 	ParamTiles      = "tiles"      // image-grid tile count
 	ParamSolveID    = "solve_id"   // carried to the solver
+	ParamUserAgent  = "user_agent" // browser UA, passed to NeedsProxy solvers
+	ParamProxy      = "proxy"      // upstream proxy URL, passed to NeedsProxy solvers
 )
 
 // widgetHit is one DOM widget container found by a probe.

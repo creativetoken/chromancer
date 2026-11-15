@@ -19,7 +19,13 @@
   proof); accepted = applied AND challenge gone; otherwise rejected → the resolve loop re-detects a
   fresh challenge. Unit tests: `TokenSubmitted` (body + header, min length), `Result.Payload`.
   Full per-vendor browser proof lands in C4 with the vendor mocks.
-- [ ] **C3 — solvers** (testmode test-sitekeys, native browser-solve, vision grid/text, external generic gRPC/stdio adapter `plugins/captcha-generic/`, per-(target,vendor,solver) stats + adaptive order).
+- [x] **C3 — solvers.** Chain testmode → native → vision → external → human.
+  - testmode answers vendor-published test sitekeys (reCAPTCHA v2/hCaptcha/Turnstile) + lab tokens; declines real keys.
+  - native clicks the widget (Challenge.Rect) and the resolver waits for the response field to fill.
+  - vision does text (ResultText) + image grid (UIActions, multi-round) with a confidence threshold and per-model accuracy.
+  - external generic adapter `plugins/captcha-generic/` speaks create-task→poll→report over HTTP, forwards sitekey/URL/action/enterprise/UA/proxy, records cost, reports on Outcome; tested against a local mock service (no real service).
+  - per-(target,vendor,solver) `Stats` (attempts/accepted/median/cost, file-backed) with optional `adaptive_order`.
+  - YAML chain config (`configs/captcha.example.yaml`, `AGENTBROWSER_CAPTCHA_CONFIG`): chain, max_solves, max_cost, timeout_per_solver, adaptive_order, external[]. Conformance passes for testmode/native/vision/generic.
 - [ ] **C4 — lab vendor mocks** (mock-recaptcha-v2/invisible/v3, mock-hcaptcha, mock-turnstile managed/invisible, image-grid, text-captcha, captcha-hard, captcha-on-failed-submit) + mock external solver service.
 - [ ] **C5 — eval (solve rate / time / cost per vendor×solver), `docs/CAPTCHA.md`, ARCHITECTURE §6.6 refresh, tag `captcha-v1`.**
 

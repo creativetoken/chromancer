@@ -6,6 +6,7 @@ require (
 	github.com/go-rod/rod v0.116.2
 	github.com/ysmood/gson v0.7.3
 	golang.org/x/crypto v0.59.0
+	golang.org/x/net v0.62.0
 )
 
 require (

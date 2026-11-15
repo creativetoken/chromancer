@@ -1,0 +1,10 @@
+<!doctype html><html><head><title>Verify</title></head>
+<body><form method="post" action="/login" id="login-form">
+  <input name="email" type="email"><input name="password" type="password">
+  <div class="captcha">
+    <img id="captcha-image" src="/captcha.png?ts=1" alt="CAPTCHA" width="160" height="50">
+    <label for="captcha_code">Enter the characters shown above</label>
+    <input id="captcha_code" name="captcha_code" type="text" maxlength="6" autocomplete="off">
+  </div>
+  <button type="submit">Sign in</button>
+</form></body></html>

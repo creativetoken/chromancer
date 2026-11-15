@@ -2,7 +2,21 @@
 
 > Single source of truth for resuming. On restart: read this file and `DECISIONS.md` first.
 
-## Status: **COMPLETE** — M1–M6 built, tested, tagged (m1…m6).
+## Active work: **CAPTCHA solving module (C1–C5)** — make automated solving the norm, human handoff the last resort.
+- [x] **C1 — detection & parameter extraction.** Unified detector + pure classifier shared by a
+  browser JS probe (computed visibility) and a pure-Go `x/net/html` probe. Classes: reCAPTCHA v2
+  checkbox / invisible / v3 / Enterprise, hCaptcha, Turnstile (managed/invisible), Cloudflare
+  interstitial, image-grid, text, Arkose/FunCaptcha + GeeTest (classify→handoff). Extracts sitekey,
+  callback, action, enterprise, data-s, rqdata, cData, size. Detects from script signals and from a
+  failed-submit response body. Fixtures in `testdata/captcha/fixtures/` (13 classes + 2 decoys);
+  unit tests prove classification + extraction + **no false positives**. Score/invisible challenges
+  are non-blocking. Lab captcha/handoff e2e stay green.
+- [ ] **C2 — injection & acceptance detection** (per-vendor callback invocation; token-reached-backend check via AuthRecorder; rejection → fresh challenge).
+- [ ] **C3 — solvers** (testmode test-sitekeys, native browser-solve, vision grid/text, external generic gRPC/stdio adapter `plugins/captcha-generic/`, per-(target,vendor,solver) stats + adaptive order).
+- [ ] **C4 — lab vendor mocks** (mock-recaptcha-v2/invisible/v3, mock-hcaptcha, mock-turnstile managed/invisible, image-grid, text-captcha, captcha-hard, captcha-on-failed-submit) + mock external solver service.
+- [ ] **C5 — eval (solve rate / time / cost per vendor×solver), `docs/CAPTCHA.md`, ARCHITECTURE §6.6 refresh, tag `captcha-v1`.**
+
+## v1 status: **COMPLETE** — M1–M6 built, tested, tagged (m1…m6).
 
 All milestones from the autonomous build instructions are implemented, with unit tests (mock
 LLM, `-race`) and browser e2e against the offline lab. `make lint test` and the full

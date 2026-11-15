@@ -1,0 +1,8 @@
+<!doctype html><html><head><title>Sign in</title>
+<script src="https://www.google.com/recaptcha/enterprise.js?render=6Lc_ent_sitekey_DDDD"></script>
+<script>
+grecaptcha.enterprise.ready(function(){
+  grecaptcha.enterprise.execute('6Lc_ent_sitekey_DDDD', {action: 'signin'});
+});
+</script></head>
+<body><form method="post" action="/login"><input name="email"><input name="password" type="password"><button>Go</button></form></body></html>

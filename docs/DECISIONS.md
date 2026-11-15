@@ -59,3 +59,23 @@
 - 2026-11-15 · **Lab inbox endpoint `GET /__lab/inbox?to=<addr>`** returns delivered messages as
   JSON; the `labinbox` VerificationProvider polls it · simplest machine-readable inbox · alt: a
   fake SMTP server (unnecessary).
+
+### CAPTCHA solving module (C1–C5)
+- 2026-11-15 · **CAPTCHA detection judged by computed visibility, not script/iframe presence** ·
+  invisible/Enterprise reCAPTCHA, invisible hCaptcha and managed Turnstile all load their script
+  and inject hidden iframes (badge is visibly *sized*; bframe present but `visibility:hidden`) with
+  no challenge to solve; matching presence dead-ended real logins (Freshworks) into a human handoff
+  before submit · the browser probe uses computed `display/visibility/opacity`; interactive fires
+  only on a shown widget or an actually-visible challenge popup · alt: bounding-box size (lies for
+  invisible widgets).
+- 2026-11-15 · **One unified detector + a pure classifier shared by a browser JS probe and a
+  pure-Go `x/net/html` probe** · the same classification must run on the live DOM, on saved HTML
+  fixtures (fast unit tests, no browser), and on a failed-submit response body · added
+  `golang.org/x/net` as a direct dep for fixture/response-body parsing (pinned v0.62.0 to keep
+  `x/crypto` at v0.59.0) · alt: browser-only detection (can't unit-test fixtures) or regex HTML
+  scraping (fragile). Replaces the per-vendor `signatureDetector`/`MockDetector`; `DetectAny` /
+  `DefaultDetectors` surface unchanged.
+- 2026-11-15 · **Score/invisible CAPTCHAs are non-blocking in the flow** · reCAPTCHA v3/Enterprise,
+  invisible v2 and invisible Turnstile execute on submit and attach their own token — the flow
+  submits and lets the page resolve them; never a human handoff for a score challenge · alt: treat
+  any detected captcha as blocking (false dead-ends).

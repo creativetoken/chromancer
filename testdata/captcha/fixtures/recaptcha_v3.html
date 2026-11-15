@@ -1,0 +1,14 @@
+<!doctype html><html><head><title>Sign in</title>
+<script src="https://www.google.com/recaptcha/api.js?render=6Lc_v3_sitekey_CCCC"></script>
+<script>
+grecaptcha.ready(function(){
+  grecaptcha.execute('6Lc_v3_sitekey_CCCC', {action: 'login'}).then(function(token){
+    document.getElementById('g-recaptcha-response').value = token;
+  });
+});
+</script></head>
+<body><form method="post" action="/login" id="login-form">
+  <input name="email" type="email"><input name="password" type="password">
+  <input type="hidden" id="g-recaptcha-response" name="g-recaptcha-response">
+  <button type="submit">Sign in</button>
+</form></body></html>

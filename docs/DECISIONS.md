@@ -31,6 +31,17 @@
   cross-compiles, no toolchain needs · alt: `mattn/go-sqlite3` (CGo).
 - 2026-11-15 · **Chrome binary resolution**: use the installed Google Chrome if found, else let
   go-rod's launcher download a browser · avoids network in the common case · alt: always download.
+- 2026-11-15 · **GitHub push deferred — remote returns 404** · operator asked to push to
+  `github.com/creativetoken/chromancer.git`, but the repo does not exist yet and there is no `gh`
+  CLI to create it; `git push` cannot create a repo · committing locally and retrying the push each
+  milestone; once the repo is created the existing history pushes cleanly · not a hard stop.
+- 2026-11-15 · **Post-login capture does a `Reload`** after optional navigate · guarantees
+  authenticated XHRs (bearer, /me, per-request-signed calls) re-fire into the post-login window even
+  on SPAs whose landing is a hash-route change that Navigate won't reload · alt: synthesize an XHR
+  (brittle, app-specific).
+- 2026-11-15 · **`Classify` prefers a real `type=submit` over a text-matched button** · a header
+  "Sign in" button (modal opener) was being chosen as the form submit · alt: positional heuristic
+  (submit after password) — kept as the secondary fallback.
 - 2026-11-15 · **Lab inbox endpoint `GET /__lab/inbox?to=<addr>`** returns delivered messages as
   JSON; the `labinbox` VerificationProvider polls it · simplest machine-readable inbox · alt: a
   fake SMTP server (unnecessary).

@@ -197,23 +197,35 @@ func (r *Recorder) Finalize(_ context.Context) (AuthRecording, error) {
 	return out, nil
 }
 
-// AuthHeaders implements AuthRecorder.
+// AuthHeaders implements AuthRecorder. It reads auth-relevant request headers
+// (Authorization, CSRF, custom X-) from post-login XHR/fetch, falling back to
+// any-phase XHR/fetch when the post-login window captured none (e.g. the first
+// authenticated call fired during the auth phase).
 func (r *Recorder) AuthHeaders() map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := map[string]string{}
-	for _, e := range r.rec.Entries {
-		if e.Phase != "post_login" || !isXHR(e.Request.Type) {
-			continue
-		}
-		for _, h := range e.Request.Headers {
-			n := strings.ToLower(h.Name)
-			if authHeaderRe.MatchString(n) && n != "x-requested-with" {
-				out[n] = h.Value // latest wins
+	collect := func(postOnly bool) map[string]string {
+		out := map[string]string{}
+		for _, e := range r.rec.Entries {
+			if !isXHR(e.Request.Type) {
+				continue
+			}
+			if postOnly && e.Phase != "post_login" {
+				continue
+			}
+			for _, h := range e.Request.Headers {
+				n := strings.ToLower(h.Name)
+				if authHeaderRe.MatchString(n) && n != "x-requested-with" {
+					out[n] = h.Value // latest wins
+				}
 			}
 		}
+		return out
 	}
-	return out
+	if out := collect(true); len(out) > 0 {
+		return out
+	}
+	return collect(false)
 }
 
 // PostLoginXHRs implements AuthRecorder.

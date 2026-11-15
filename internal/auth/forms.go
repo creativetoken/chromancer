@@ -1,0 +1,347 @@
+// Package auth is the single owner of getting a session: entrypoint discovery,
+// login/signup flow handlers, deterministic success detection, session
+// restore, and producing the handback.
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/creativetoken/chromancer/internal/browser"
+	"github.com/creativetoken/chromancer/internal/identity"
+	"github.com/creativetoken/chromancer/internal/perceive"
+)
+
+// Mode selects login vs signup.
+type Mode int
+
+// Modes.
+const (
+	Login Mode = iota
+	Signup
+)
+
+// String renders the mode.
+func (m Mode) String() string {
+	if m == Signup {
+		return "signup"
+	}
+	return "login"
+}
+
+// Hints are optional operator-supplied entrypoint URLs.
+type Hints struct {
+	LoginURL  string
+	SignupURL string
+}
+
+// Sentinel errors mapped to job failure reasons by the server.
+var (
+	ErrSSOOnly          = errors.New("sso_only")
+	ErrUnknownFlow      = errors.New("unknown_flow")
+	ErrFlowFailed       = errors.New("flow_failed")
+	ErrStuck            = errors.New("stuck")
+	ErrEntryNotFound    = errors.New("entrypoint_not_found")
+	ErrNotAuthenticated = errors.New("not_authenticated")
+)
+
+var (
+	identRe    = regexp.MustCompile(`(?i)(e-?mail|user(name)?|login|account|phone|identifier)`)
+	submitRe   = regexp.MustCompile(`(?i)^(sign ?in|log ?in|login|continue|next|submit|enter|go|sign ?up|register|create account|get started|join|verify|confirm)\b`)
+	ssoRe      = regexp.MustCompile(`(?i)(sign in with|continue with|log in with|login with|sign up with)\s+\w+`)
+	authWordRe = regexp.MustCompile(`(?i)(sign ?in|log ?in|login|sign ?up|register|create (an )?account|members|welcome back)`)
+)
+
+// Fields is the classified set of form controls on a page.
+type Fields struct {
+	Identifier *perceive.Node
+	Password   *perceive.Node
+	Submit     *perceive.Node
+	HasAlert   bool
+	AlertText  string
+	SSOButtons []perceive.Node
+}
+
+// Classify finds the identifier / password / submit controls in a state.
+func Classify(st perceive.State) Fields {
+	var f Fields
+	var submitByType, submitByText *perceive.Node
+	for i := range st.Nodes {
+		n := &st.Nodes[i]
+		if !n.Visible || n.Disabled {
+			continue
+		}
+		switch {
+		case n.Tag == "input" && n.Type == "password":
+			if f.Password == nil {
+				f.Password = n
+			}
+		case n.Tag == "input" && (n.Type == "email" || n.Type == "text" || n.Type == "tel" || n.Type == "") && f.Identifier == nil:
+			if n.Type == "email" || n.Autocomplete == "username" || n.Autocomplete == "email" ||
+				identRe.MatchString(n.Name) || identRe.MatchString(n.NameAttr) || identRe.MatchString(n.ID) || identRe.MatchString(n.Placeholder) {
+				f.Identifier = n
+			}
+		case n.Tag == "button" || (n.Tag == "input" && (n.Type == "submit" || n.Type == "button")) || n.Role == "button":
+			label := n.Name
+			if label == "" {
+				label = n.Text
+			}
+			if ssoRe.MatchString(label) {
+				f.SSOButtons = append(f.SSOButtons, *n)
+				continue
+			}
+			if n.Type == "submit" {
+				if submitByType == nil {
+					submitByType = n
+				}
+			} else if submitByText == nil && submitRe.MatchString(strings.TrimSpace(label)) {
+				submitByText = n
+			}
+		case n.Tag == "a" && ssoRe.MatchString(n.Name):
+			f.SSOButtons = append(f.SSOButtons, *n)
+		}
+	}
+	// Prefer a real type=submit control over a text-matched button (the latter
+	// can be a modal opener like a header "Sign in" button).
+	switch {
+	case submitByType != nil:
+		f.Submit = submitByType
+	case submitByText != nil:
+		f.Submit = submitByText
+	}
+	// Fallback identifier: the first visible text-like input when a password exists.
+	if f.Identifier == nil && f.Password != nil {
+		for i := range st.Nodes {
+			n := &st.Nodes[i]
+			if n.Visible && n.Tag == "input" && (n.Type == "text" || n.Type == "email" || n.Type == "") && n.Handle < f.Password.Handle {
+				f.Identifier = n
+				break
+			}
+		}
+	}
+	lower := strings.ToLower(st.Text)
+	if strings.Contains(lower, "invalid") || strings.Contains(lower, "incorrect") || strings.Contains(lower, "wrong password") || strings.Contains(lower, "no account") || strings.Contains(lower, "try again") {
+		f.HasAlert = true
+		f.AlertText = firstMatchLine(st.Text, []string{"invalid", "incorrect", "wrong", "no account", "try again"})
+	}
+	return f
+}
+
+func firstMatchLine(text string, needles []string) string {
+	for _, sent := range strings.Split(text, ".") {
+		ls := strings.ToLower(sent)
+		for _, n := range needles {
+			if strings.Contains(ls, n) {
+				return strings.TrimSpace(sent)
+			}
+		}
+	}
+	return ""
+}
+
+// IsAuthForm reports whether the state shows a usable login/signup form (or
+// the first step of a multistep flow) and which variant it looks like.
+func IsAuthForm(st perceive.State, mode Mode) (ok bool, variant string) {
+	f := Classify(st)
+	mentions := authWordRe.MatchString(st.Title) || authWordRe.MatchString(strings.Join(st.Headings, " ")) || authWordRe.MatchString(st.Text)
+	switch {
+	case f.Password != nil && f.Identifier != nil:
+		return true, "form"
+	case f.Password != nil:
+		return true, "form"
+	case f.Identifier != nil && f.Submit != nil && mentions:
+		return true, "multistep"
+	}
+	return false, ""
+}
+
+// IsSSOOnly reports whether the page offers only third-party sign-in buttons.
+func IsSSOOnly(st perceive.State) bool {
+	f := Classify(st)
+	return len(f.SSOButtons) > 0 && f.Identifier == nil && f.Password == nil
+}
+
+// FlowDeps is what a FlowHandler needs to act.
+type FlowDeps struct {
+	Page      *browser.Page
+	Perceiver perceive.Perceiver
+	Log       func(kind string, payload map[string]any)
+	Trace     func(format string, args ...any)
+	Timeout   time.Duration
+}
+
+// FlowHandler handles one login/signup variant. It owns the form submit.
+type FlowHandler interface {
+	Variant() string
+	CanHandle(st perceive.State) bool
+	Run(ctx context.Context, st perceive.State, creds identity.Credentials, d FlowDeps) error
+}
+
+// actor performs typed actions against perceived nodes. Each action is bounded
+// by FlowDeps.Timeout so a stuck element fails fast rather than hanging on the
+// run context.
+type actor struct{ d FlowDeps }
+
+func (a actor) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	to := a.d.Timeout
+	if to <= 0 {
+		to = 8 * time.Second
+	}
+	return context.WithTimeout(ctx, to)
+}
+
+func (a actor) typeInto(ctx context.Context, n *perceive.Node, text, label string) error {
+	cctx, cancel := a.bound(ctx)
+	defer cancel()
+	fr, err := perceive.FrameOf(cctx, a.d.Page, *n)
+	if err != nil {
+		return err
+	}
+	el, err := a.d.Page.Element(cctx, fr, perceive.Selector(n.Handle), a.d.Timeout)
+	if err != nil {
+		return err
+	}
+	if err := a.d.Page.TypeInto(cctx, el, text); err != nil {
+		return err
+	}
+	a.d.Log("action", map[string]any{"kind": "type", "handle": n.Handle, "field": label, "frame": n.Frame})
+	return nil
+}
+
+func (a actor) click(ctx context.Context, n *perceive.Node, label string) error {
+	cctx, cancel := a.bound(ctx)
+	defer cancel()
+	fr, err := perceive.FrameOf(cctx, a.d.Page, *n)
+	if err != nil {
+		return err
+	}
+	el, err := a.d.Page.Element(cctx, fr, perceive.Selector(n.Handle), a.d.Timeout)
+	if err != nil {
+		return err
+	}
+	if err := a.d.Page.Click(cctx, el); err != nil {
+		return err
+	}
+	a.d.Log("action", map[string]any{"kind": "click", "handle": n.Handle, "label": label, "frame": n.Frame})
+	return nil
+}
+
+func (a actor) submit(ctx context.Context, f Fields, fallback *perceive.Node) error {
+	if f.Submit != nil {
+		return a.click(ctx, f.Submit, "submit")
+	}
+	if fallback == nil {
+		return fmt.Errorf("%w: no submit control", ErrFlowFailed)
+	}
+	fr, err := perceive.FrameOf(ctx, a.d.Page, *fallback)
+	if err != nil {
+		return err
+	}
+	el, err := a.d.Page.Element(ctx, fr, perceive.Selector(fallback.Handle), a.d.Timeout)
+	if err != nil {
+		return err
+	}
+	a.d.Log("action", map[string]any{"kind": "press_enter", "handle": fallback.Handle})
+	return a.d.Page.PressEnter(ctx, el)
+}
+
+// FormHandler handles a single-page login form, including forms inside a
+// modal or an iframe (perception is frame-aware).
+type FormHandler struct{}
+
+// Variant implements FlowHandler.
+func (FormHandler) Variant() string { return "form" }
+
+// CanHandle implements FlowHandler.
+func (FormHandler) CanHandle(st perceive.State) bool {
+	return Classify(st).Password != nil
+}
+
+// Run implements FlowHandler.
+func (h FormHandler) Run(ctx context.Context, st perceive.State, creds identity.Credentials, d FlowDeps) error {
+	f := Classify(st)
+	if f.Password == nil {
+		return fmt.Errorf("%w: no password field", ErrUnknownFlow)
+	}
+	a := actor{d}
+	if f.Identifier != nil {
+		if err := a.typeInto(ctx, f.Identifier, creds.UsernameOrEmail, "identifier"); err != nil {
+			return fmt.Errorf("type identifier: %w", err)
+		}
+	}
+	if err := a.typeInto(ctx, f.Password, creds.Password, "password"); err != nil {
+		return fmt.Errorf("type password: %w", err)
+	}
+	d.Trace("form: filled identifier+password, submitting")
+	if err := a.submit(ctx, f, f.Password); err != nil {
+		return fmt.Errorf("submit: %w", err)
+	}
+	return d.Page.WaitStable(ctx, browser.DefaultStableTimeout)
+}
+
+// MultiStepHandler handles identifier-first flows (email → next → password).
+type MultiStepHandler struct{}
+
+// Variant implements FlowHandler.
+func (MultiStepHandler) Variant() string { return "multistep" }
+
+// CanHandle implements FlowHandler.
+func (MultiStepHandler) CanHandle(st perceive.State) bool {
+	f := Classify(st)
+	return f.Password == nil && f.Identifier != nil
+}
+
+// Run implements FlowHandler.
+func (h MultiStepHandler) Run(ctx context.Context, st perceive.State, creds identity.Credentials, d FlowDeps) error {
+	a := actor{d}
+	for step := 1; step <= 3; step++ {
+		f := Classify(st)
+		switch {
+		case f.Password != nil:
+			if f.Identifier != nil && f.Identifier.Value == "" {
+				if err := a.typeInto(ctx, f.Identifier, creds.UsernameOrEmail, "identifier"); err != nil {
+					return err
+				}
+			}
+			if err := a.typeInto(ctx, f.Password, creds.Password, "password"); err != nil {
+				return err
+			}
+			d.Trace("multistep: step %d password submitted", step)
+			if err := a.submit(ctx, f, f.Password); err != nil {
+				return err
+			}
+			return d.Page.WaitStable(ctx, browser.DefaultStableTimeout)
+		case f.Identifier != nil:
+			if err := a.typeInto(ctx, f.Identifier, creds.UsernameOrEmail, "identifier"); err != nil {
+				return err
+			}
+			d.Trace("multistep: step %d identifier submitted", step)
+			if err := a.submit(ctx, f, f.Identifier); err != nil {
+				return err
+			}
+			if err := d.Page.WaitStable(ctx, browser.DefaultStableTimeout); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: multistep step %d has no fields", ErrFlowFailed, step)
+		}
+		var err error
+		st, _, err = d.Perceiver.Perceive(ctx, d.Page)
+		if err != nil {
+			return err
+		}
+		if nf := Classify(st); nf.HasAlert && nf.Password == nil {
+			return fmt.Errorf("%w: %s", ErrFlowFailed, nf.AlertText)
+		}
+	}
+	return fmt.Errorf("%w: multistep did not reach a password step", ErrFlowFailed)
+}
+
+// DefaultHandlers is the ordered handler set tried against a perceived form.
+func DefaultHandlers() []FlowHandler {
+	return []FlowHandler{FormHandler{}, MultiStepHandler{}}
+}

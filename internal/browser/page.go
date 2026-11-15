@@ -39,6 +39,20 @@ func (p *Page) Navigate(ctx context.Context, url string) error {
 	return p.WaitStable(ctx, DefaultStableTimeout)
 }
 
+// Reload reloads the current page and waits for it to settle. Useful for the
+// post-login capture window so authenticated XHRs re-fire even on a SPA whose
+// landing route is a hash change (which Navigate would not reload).
+func (p *Page) Reload(ctx context.Context) error {
+	rp := p.rp.Context(ctx)
+	if err := rp.Reload(); err != nil {
+		return fmt.Errorf("browser: reload: %w", err)
+	}
+	if err := rp.WaitLoad(); err != nil && !errors.Is(err, context.Canceled) {
+		p.b.logf("reload waitload: %v", err)
+	}
+	return p.WaitStable(ctx, DefaultStableTimeout)
+}
+
 // URL returns the current top-level URL.
 func (p *Page) URL() string {
 	info, err := p.rp.Info()

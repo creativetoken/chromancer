@@ -1,0 +1,302 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/creativetoken/chromancer/internal/audit"
+	"github.com/creativetoken/chromancer/internal/auth/entry"
+	"github.com/creativetoken/chromancer/internal/browser"
+	"github.com/creativetoken/chromancer/internal/core"
+	"github.com/creativetoken/chromancer/internal/handback"
+	"github.com/creativetoken/chromancer/internal/identity"
+	"github.com/creativetoken/chromancer/internal/model"
+	"github.com/creativetoken/chromancer/internal/perceive"
+)
+
+// Authenticator is the single owner of obtaining a session using
+// operator-provided credentials and producing the handback.
+type Authenticator struct {
+	Target     string
+	Account    string
+	Creds      identity.Credentials
+	Perceiver  perceive.Perceiver
+	Router     model.ModelRouter
+	Sessions   SessionStore
+	Writer     handback.ArtefactWriter
+	Audit      audit.AuditLog
+	Budget     core.Budget
+	Capture    handback.CaptureWindow
+	EntryCache string
+	Handlers   []FlowHandler
+	Timeout    time.Duration
+
+	trace handback.Trace
+}
+
+// Run authenticates (target, account) in the given mode and returns the
+// handback result. It restores a healthy saved session without logging in,
+// else runs the login/signup flow, handles verification/CAPTCHA via the
+// provided hooks, detects success, captures the post-login window, builds the
+// SessionBundle, runs the replayability check and writes the artefacts.
+func (a *Authenticator) Run(ctx context.Context, b *browser.Browser, mode Mode, hints Hints) (handback.Result, error) {
+	if a.Perceiver == nil {
+		a.Perceiver = perceive.New()
+	}
+	if len(a.Handlers) == 0 {
+		a.Handlers = DefaultHandlers()
+	}
+	if a.Timeout == 0 {
+		a.Timeout = 8 * time.Second
+	}
+	if a.Capture.N == 0 {
+		a.Capture = handback.CaptureWindow{N: 20, T: 10 * time.Second}
+	}
+	a.trace = handback.Trace{StartedAt: time.Now().UTC(), Timings: map[string]string{}}
+
+	p, err := b.NewPage(ctx)
+	if err != nil {
+		return handback.Result{}, fmt.Errorf("auth: new page: %w", err)
+	}
+	defer p.Close()
+
+	rec := handback.NewRecorder()
+	if err := rec.Begin(ctx, p); err != nil {
+		return handback.Result{}, fmt.Errorf("auth: recorder: %w", err)
+	}
+
+	// 1. Restore a healthy saved session.
+	if restored, res, ok := a.tryRestore(ctx, p, rec); ok {
+		return res, nil
+	} else if restored {
+		a.log("session", map[string]any{"restore": "stale"})
+	}
+
+	// 2/3. Run the flow (entrypoint discovery + fill + submit + verify + success).
+	if err := a.authenticate(ctx, p, rec, mode, hints); err != nil {
+		return handback.Result{}, err
+	}
+
+	// 6. Success → post-login capture → bundle → replay → write.
+	return a.finish(ctx, p, rec)
+}
+
+func (a *Authenticator) tryRestore(ctx context.Context, p *browser.Page, rec *handback.Recorder) (bool, handback.Result, bool) {
+	if a.Sessions == nil {
+		return false, handback.Result{}, false
+	}
+	saved, err := a.Sessions.Load(ctx)
+	if err != nil {
+		return false, handback.Result{}, false
+	}
+	if err := p.ImportState(ctx, saved.State); err != nil {
+		return true, handback.Result{}, false
+	}
+	landing := saved.LandingURL
+	if landing == "" {
+		landing = saved.State.Origin + "/"
+	}
+	if err := p.Navigate(ctx, landing); err != nil {
+		return true, handback.Result{}, false
+	}
+	st, _, err := a.Perceiver.Perceive(ctx, p)
+	if err != nil {
+		return true, handback.Result{}, false
+	}
+	base := Baseline{URL: ""}
+	ok, ev := SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs())
+	if !ok {
+		return true, handback.Result{}, false
+	}
+	a.trace.Restored = true
+	a.trace.SuccessEvidence = ev
+	a.trace.Add("restored healthy session, no login")
+	res, err := a.capture(ctx, p, rec, landing)
+	if err != nil {
+		return true, handback.Result{}, false
+	}
+	return true, res, true
+}
+
+func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
+	root := a.Target
+	res := &entry.Resolver{CacheDir: a.EntryCache}
+	check := func(st perceive.State, m entry.Mode) (bool, string) {
+		return IsAuthForm(st, Mode(m))
+	}
+	hintList := []string{hints.LoginURL}
+	if mode == Signup {
+		hintList = []string{hints.SignupURL, hints.LoginURL}
+	}
+	ep, err := res.Resolve(ctx, a.Target, root, entry.Mode(mode), hintList, entry.Deps{
+		Page: p, Perceiver: a.Perceiver, Router: a.Router, Check: check,
+		Trace: a.tracef, Timeout: a.Timeout,
+	})
+	if err != nil {
+		// SSO-only check: if the located page offers only SSO, fail fast.
+		if st, _, perr := a.Perceiver.Perceive(ctx, p); perr == nil && IsSSOOnly(st) {
+			return fmt.Errorf("%w", ErrSSOOnly)
+		}
+		return fmt.Errorf("%w: %v", ErrEntryNotFound, err)
+	}
+	a.trace.Entrypoint = ep.URL
+	a.trace.EntrypointHow = ep.How
+
+	st, _, err := a.Perceiver.Perceive(ctx, p)
+	if err != nil {
+		return fmt.Errorf("auth: perceive form: %w", err)
+	}
+	if IsSSOOnly(st) {
+		return fmt.Errorf("%w", ErrSSOOnly)
+	}
+	base := TakeBaseline(ctx, p)
+
+	deps := FlowDeps{Page: p, Perceiver: a.Perceiver, Log: a.log, Trace: a.tracef, Timeout: a.Timeout}
+	handler := a.pickHandler(st)
+	if handler == nil {
+		return fmt.Errorf("%w: no handler for perceived form", ErrUnknownFlow)
+	}
+	a.trace.FlowVariant = handler.Variant()
+	a.log("flow", map[string]any{"variant": handler.Variant(), "mode": mode.String()})
+	if err := handler.Run(ctx, st, a.Creds, deps); err != nil {
+		return err
+	}
+
+	// Check success; allow the success detector to see captured XHRs.
+	st, _, err = a.Perceiver.Perceive(ctx, p)
+	if err != nil {
+		return fmt.Errorf("auth: perceive post-submit: %w", err)
+	}
+	ok, ev := SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs())
+	if !ok {
+		// A short settle + one retry of perception (XHRs may still be landing).
+		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+		st, _, _ = a.Perceiver.Perceive(ctx, p)
+		ok, ev = SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs())
+	}
+	if !ok {
+		if f := Classify(st); f.HasAlert {
+			return fmt.Errorf("%w: form error: %s", ErrFlowFailed, f.AlertText)
+		}
+		return fmt.Errorf("%w", ErrNotAuthenticated)
+	}
+	a.trace.SuccessEvidence = ev
+	a.trace.Add("authenticated: %s", strings.Join(ev, ", "))
+	return nil
+}
+
+func (a *Authenticator) pickHandler(st perceive.State) FlowHandler {
+	for _, h := range a.Handlers {
+		if h.CanHandle(st) {
+			return h
+		}
+	}
+	return nil
+}
+
+// capture runs the post-login window, builds the bundle, replay-checks it and
+// writes the artefacts.
+func (a *Authenticator) capture(ctx context.Context, p *browser.Page, rec *handback.Recorder, landing string) (handback.Result, error) {
+	// Load the landing page once so there is always something to capture.
+	if landing == "" {
+		landing = p.URL()
+	}
+	_ = rec.MarkAuthenticated(ctx, a.Capture)
+	if landing != "" && landing != p.URL() {
+		_ = p.Navigate(ctx, landing)
+	}
+	// Reload so authenticated XHRs re-fire even when the landing route is a hash
+	// change (SPA) that Navigate would not reload. Guarantees the bearer/auth
+	// header and /me-style calls land in the post-login window.
+	_ = p.Reload(ctx)
+	rec.WaitWindow(ctx)
+
+	state, err := p.ExportState(ctx)
+	if err != nil {
+		return handback.Result{}, fmt.Errorf("auth: export state: %w", err)
+	}
+	recording, err := rec.Finalize(ctx)
+	if err != nil {
+		return handback.Result{}, fmt.Errorf("auth: finalize recording: %w", err)
+	}
+	authHeaders := rec.AuthHeaders()
+
+	bundle := handback.SessionBundle{
+		Target: a.Target, Account: a.Account, Origin: state.Origin,
+		Cookies: state.Cookies, LocalStorage: state.LocalStorage, SessionStorage: state.SessionStorage,
+		AuthHeaders: authHeaders, UserAgent: state.UserAgent, LandingURL: landing, CapturedAt: time.Now().UTC(),
+	}
+	// Token expiry from bearer/JWT in headers or storage.
+	vals := []string{authHeaders["authorization"]}
+	for _, v := range state.LocalStorage {
+		vals = append(vals, v)
+	}
+	bundle.TokenExpiry = JWTExpiry(vals...)
+
+	replayer := handback.NewHTTPReplayChecker()
+	replayable, reason, _ := replayer.Check(ctx, bundle, recording, rec.VaryingHeaders())
+	bundle.Replayable = replayable
+	bundle.ReplayReason = reason
+	a.trace.Replayable = replayable
+	a.trace.ReplayReason = reason
+	a.trace.Add("replayability: %v %s", replayable, reason)
+
+	// Persist the saved session for restore-without-login.
+	if a.Sessions != nil {
+		_ = a.Sessions.Save(ctx, SavedSession{Target: a.Target, LandingURL: landing, State: state, AuthHeaders: authHeaders, SavedAt: time.Now().UTC()})
+	}
+
+	bref, err := a.Writer.WriteBundle(ctx, bundle)
+	if err != nil {
+		return handback.Result{}, fmt.Errorf("auth: write bundle: %w", err)
+	}
+	rref, err := a.Writer.WriteRecording(ctx, recording)
+	if err != nil {
+		return handback.Result{}, fmt.Errorf("auth: write recording: %w", err)
+	}
+	a.trace.FinishedAt = time.Now().UTC()
+	a.trace.Timings["total_ms"] = fmt.Sprintf("%d", a.trace.FinishedAt.Sub(a.trace.StartedAt).Milliseconds())
+	a.log("handback", map[string]any{"bundle": bref.URI, "recording": rref.URI, "replayable": replayable})
+	return handback.Result{BundleRef: bref, RecordingRef: rref, Trace: a.trace}, nil
+}
+
+func (a *Authenticator) finish(ctx context.Context, p *browser.Page, rec *handback.Recorder) (handback.Result, error) {
+	landing := p.URL()
+	return a.capture(ctx, p, rec, landing)
+}
+
+func (a *Authenticator) log(kind string, payload map[string]any) {
+	if a.Audit == nil {
+		return
+	}
+	_, _ = a.Audit.Append(context.Background(), audit.Entry{Actor: "authenticator", Kind: kind, Payload: payload})
+}
+
+func (a *Authenticator) tracef(format string, args ...any) { a.trace.Add(format, args...) }
+
+// FailReason maps a Run error to a stable job failure reason.
+func FailReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrSSOOnly):
+		return "sso_only"
+	case errors.Is(err, ErrEntryNotFound):
+		return "entrypoint_not_found"
+	case errors.Is(err, ErrUnknownFlow):
+		return "unknown_flow"
+	case errors.Is(err, ErrNotAuthenticated):
+		return "not_authenticated"
+	case errors.Is(err, ErrStuck):
+		return "stuck"
+	case errors.Is(err, core.ErrBudgetExhausted):
+		return "budget_exhausted"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "cancelled"
+	default:
+		return "flow_failed"
+	}
+}

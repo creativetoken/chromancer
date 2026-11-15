@@ -31,6 +31,11 @@
   cross-compiles, no toolchain needs · alt: `mattn/go-sqlite3` (CGo).
 - 2026-11-15 · **Chrome binary resolution**: use the installed Google Chrome if found, else let
   go-rod's launcher download a browser · avoids network in the common case · alt: always download.
+- 2026-11-15 · **Deterministic "skills" are realized in `auth` (FlowHandlers: form/multistep/
+  signup, success detection, verification) and `explore` (nav/form/pagination), not a separate
+  `internal/skills` package** · the skill set the spec anticipated is small and cohesive with its
+  owners; a standalone registry would be indirection without payoff · ARCHITECTURE §10 lists
+  `skills/`; the empty dir was removed. Revisit if a cross-flow skill library emerges.
 - 2026-11-15 · **GitHub push deferred — remote returns 404** · operator asked to push to
   `github.com/creativetoken/chromancer.git`, but the repo does not exist yet and there is no `gh`
   CLI to create it; `git push` cannot create a repo · committing locally and retrying the push each

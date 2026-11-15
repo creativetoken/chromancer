@@ -457,8 +457,7 @@ Phase 2 reuses v1's perception, model abstraction, skills, budgets and audit unc
 cmd/agentbrowser/       # CLI entrypoint
 internal/
   server/               # MCP server + JobManager (start_auth/get_job/resolve_challenge/…)
-  core/                 # control loop, planner, verifier, skill registry
-  skills/               # deterministic skills (typed forms, multistep, banners)
+  core/                 # typed action space, budget/kill-switch, (planner/verifier seams)
   perceive/             # a11y perceiver, set-of-marks
   browser/              # go-rod driver, persistent contexts, waiting, optional proxy
   model/                # LLMProvider interface, router, capability negotiation

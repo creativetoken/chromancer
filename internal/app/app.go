@@ -68,6 +68,12 @@ func buildRouter(l config.LLMConfig) (model.ModelRouter, error) {
 	case "openai":
 		p := provider.NewOpenAICompat(provider.OpenAIOptions{BaseURL: l.BaseURL, Model: l.Model, JSONMode: l.JSONMode})
 		return &model.StaticRouter{Default: p}, nil
+	case "anthropic":
+		p := provider.NewAnthropic(provider.AnthropicOptions{BaseURL: l.BaseURL, Model: l.Model})
+		return &model.StaticRouter{Default: p}, nil
+	case "gemini":
+		p := provider.NewGemini(provider.GeminiOptions{BaseURL: l.BaseURL, Model: l.Model})
+		return &model.StaticRouter{Default: p}, nil
 	default:
 		return nil, fmt.Errorf("app: unknown llm provider %q", l.Provider)
 	}

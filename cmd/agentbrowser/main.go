@@ -7,14 +7,19 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/creativetoken/chromancer/internal/app"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/config"
+	"github.com/creativetoken/chromancer/internal/eval"
 	"github.com/creativetoken/chromancer/internal/identity"
+	"github.com/creativetoken/chromancer/internal/lab"
 	"github.com/creativetoken/chromancer/internal/server"
 )
 
@@ -36,6 +41,8 @@ func main() {
 		err = cmdExport(ctx, os.Args[2:])
 	case "crawl":
 		err = cmdCrawl(ctx, os.Args[2:])
+	case "eval":
+		err = cmdEval(ctx, os.Args[2:])
 	case "mcp":
 		err = cmdMCP(ctx, os.Args[2:])
 	case "newkey":
@@ -66,6 +73,7 @@ Usage:
   agentbrowser auth --account NAME --mode login|signup [--login-url URL] [--signup-url URL] [--headful]
   agentbrowser export-session --account NAME
   agentbrowser crawl --account NAME [--headful]   # Phase 2: authenticated crawl
+  agentbrowser eval [--runs N]            # benchmark the configured model vs the lab
   agentbrowser mcp                        # run the MCP server over stdio
   agentbrowser newkey
 
@@ -175,6 +183,39 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	}
 	out, _ := json.MarshalIndent(map[string]any{"status": "done", "report": res.Report}, "", "  ")
 	fmt.Println(string(out))
+	return nil
+}
+
+func cmdEval(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
+	runs := fs.Int("runs", 1, "runs per scenario")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg := config.Default()
+	cfg.Headless = true
+	cfg.Workspace = filepath.Join(os.TempDir(), "agentbrowser-eval")
+	a, err := app.New(cfg)
+	if err != nil {
+		return err
+	}
+	srv := lab.New()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	base := "http://" + ln.Addr().String()
+	srv.SetBase(base)
+	hs := &http.Server{Handler: srv.Handler()}
+	go hs.Serve(ln)
+	defer hs.Close()
+
+	h := &eval.Harness{App: a, Lab: srv, LabBase: base, ModelName: cfg.LLM.Provider, Runs: *runs}
+	rows, err := h.Run(ctx, eval.DefaultScenarios())
+	if err != nil {
+		return err
+	}
+	fmt.Print(eval.Table(rows))
 	return nil
 }
 

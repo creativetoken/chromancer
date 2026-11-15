@@ -142,7 +142,7 @@ func (e *Explorer) Crawl(ctx context.Context) (*Report, error) {
 		}
 
 		// Exercise a representative form (once per template).
-		if e.submitForms() && !submittedTmpl[tmpl] {
+		if e.SubmitForms && !submittedTmpl[tmpl] {
 			if e.trySubmitForm(ctx, st, rep) {
 				submittedTmpl[tmpl] = true
 				// Re-perceive after submit (state may have changed).
@@ -182,9 +182,6 @@ func (e *Explorer) Crawl(ctx context.Context) (*Report, error) {
 	}
 	return rep, nil
 }
-
-func (e *Explorer) submitForms() bool   { return e.SubmitForms || !e.formsDisabled() }
-func (e *Explorer) formsDisabled() bool { return false }
 
 // navigate goes to a URL, bounded by PerAction. Account-safety hrefs are never
 // enqueued, so navigation targets are already filtered.

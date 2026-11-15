@@ -45,9 +45,14 @@ func Default() Config {
 	}
 	prov := os.Getenv("AGENTBROWSER_LLM")
 	if prov == "" {
-		if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("OPENAI_BASE_URL") != "" {
+		switch {
+		case os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("OPENAI_BASE_URL") != "":
 			prov = "openai"
-		} else {
+		case os.Getenv("ANTHROPIC_API_KEY") != "":
+			prov = "anthropic"
+		case os.Getenv("GEMINI_API_KEY") != "":
+			prov = "gemini"
+		default:
 			prov = "mock"
 		}
 	}

@@ -436,7 +436,7 @@ func (a *Authenticator) doVerify(ctx context.Context, p *browser.Page, deps Flow
 	a.log("verification", map[string]any{"channel": string(vs.Channel), "hint": vs.Hint, "link_only": vs.LinkOnly})
 	vctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Hint: vs.Hint, Since: *since, Deadline: deadline})
+	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: deadline})
 	if err != nil {
 		return fmt.Errorf("%w: verification: %v", ErrFlowFailed, err)
 	}

@@ -151,14 +151,22 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 // the stored seed) first, then either the MCP ask-bridge (when asker != nil) or
 // an interactive CLI prompt, plus a webhook fallback.
 func (a *App) verifier(account string, creds identity.Credentials, asker verify.Asker) verify.Provider {
-	chain := verify.Chain{
-		verify.NewTOTP(func(acc string) string {
-			if acc == account {
-				return creds.TOTPSeed
-			}
-			return ""
-		}),
+	var chain verify.Chain
+	// Automatic providers first (Twilio SMS, Gmail IMAP, per-target TOTP) when a
+	// resources config is set; they only claim channels/accounts they have a
+	// resource for, so unconfigured channels fall through to the stored seed and
+	// then the ask/CLI fallbacks.
+	if path := os.Getenv("AGENTBROWSER_RESOURCES"); path != "" {
+		if res, err := verify.LoadResources(path); err == nil {
+			chain = append(chain, a.BuildVerifyChain(res, verify.NewClaimStore()))
+		}
 	}
+	chain = append(chain, verify.NewTOTP(func(acc string) string {
+		if acc == account {
+			return creds.TOTPSeed
+		}
+		return ""
+	}))
 	if asker != nil {
 		chain = append(chain, verify.NewAsk(asker))
 	} else {

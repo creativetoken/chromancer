@@ -1,130 +1,112 @@
 # ROADMAP
 
-> v1 goal: **authenticate and hand the session back.** Thin vertical slice first. Each
-> milestone: scope, acceptance, a lab demo, rough effort (engineer-weeks, one experienced Go
-> engineer). Budgets, audit (redaction), and the per-account lock are built into M0 and every
-> path from the first commit. **No scope enforcement anywhere.**
+> Built autonomously from `docs/ARCHITECTURE.md` (the approved spec). A milestone is done only when
+> **all** its acceptance criteria pass in automated tests, `docs/PROGRESS.md` is updated, and the
+> milestone is tagged (`m1`, `m2`, …). Everything is testable offline against the local lab
+> (`cmd/authlab`); real LLM providers are used only when their API-key env var is set.
 
-Legend: **S** ≤1w · **M** 1–2w · **L** 2–4w · **XL** 4w+.
+## Step 0 — Setup
+`docs/INTERFACES.md`, this roadmap, Go module scaffold per ARCHITECTURE §10, `Makefile`
+(`build test lint lab e2e`), CI config, `README.md`, `docs/PROGRESS.md`, `docs/DECISIONS.md`.
 
----
+## Step 0.5 — Local test lab (`cmd/authlab`)
+One Go binary serving mock web apps on localhost, each on its own path prefix. Each exposes
+machine-readable ground truth at `/__lab/expect`; a lab inbox backs the `labinbox`
+VerificationProvider.
 
-## M0 — Skeleton + foundation
-**Scope:** project layout; config + per-account workspace; SQLite store + migrations; append-only
-hash-chained audit log with **redaction before write**; Budget/kill-switch (tokens + solver cost);
-credential store (operator creds + profile, encrypted); one `LLMProvider` (Anthropic *or* an
-OpenAI-compatible local endpoint) with the structured-output ladder (tiers 1–3); go-rod browser
-wrapper with a **persistent profile per account**, navigate/snapshot(a11y)/act/wait, optional
-upstream proxy. No ScopeGuard.
-**Acceptance:** navigate, produce an a11y snapshot, perform a typed action; every step is
-budget-charged and redact-then-audited with a verifiable hash chain; a saved session can be
-imported into a context.
-**Effort:** L.
-
-## M1 — Login with provided creds → SessionBundle + AuthRecording (CLI) ⭐
-**Scope:** `Authenticator` v1 (`Run`, mode=login) with **entrypoint discovery** (§6.0: `login_url`
-hint → per-target cache → link/path/modal probe → LLM fallback), the single-page-form
-`FlowHandler`, deterministic **success detection** (§6.3), and **session restore** (healthy saved
-session → no login); `AuthRecorder` with the **post-login capture window** (load landing page once,
-then N requests / T seconds; bodies, secrets flagged); `SessionBundle` builder (cookies w/ flags +
-local/session storage + **auth headers observed on post-login XHR** + UA + proxy + JWT exp);
-**replayability check** (plain Go HTTP replay of one authed XHR → `replayable` + reason);
-**artefacts written to the workspace and returned by path**; CLI `auth --mode login`.
-**Acceptance:** given operator creds, the agent reaches the login form **without a hint** on one
-local app and **with a hint** on another, logs in ≥90% of attempts (5 runs), detects success
-deterministically, and returns a **SessionBundle that re-imports into a fresh context and is
-authenticated without a new login** (incl. a bearer-only app working via the captured auth
-headers); the replayability check reports `replayable: true` on a cookie/bearer app and a
-**named reason** on a scripted request-signing mock; the **AuthRecording** contains the login
-flow + the post-login window with secrets flagged; restore path logs in zero times on a second run;
-artefacts are returned as paths, never inline.
-**Demo:** `agentbrowser auth --target juiceshop --account alice --mode login` → prints bundle +
-recording; the bundle loads elsewhere and lands logged-in.
-**Effort:** L. *First end-to-end proof and the go/no-go gate.*
-
-## M2 — MCP job interface + export_session
-**Scope:** `internal/server` + `JobManager`: **`start_auth(target, account, mode, login_url?,
-signup_url?)` → `{job_id}`**, **`get_job`** (`running | done{bundle_ref, recording_ref, trace} |
-failed{reason}` with named reasons `sso_only | budget_exhausted | cancelled | handoff_timeout`),
-**`cancel_job`**, **`export_session(account)`** → a bundle reference; artefacts exposed as **MCP
-resource URIs**; **per-account lock**; thin adapters over the core so budgets/audit/lock apply
-identically to CLI and MCP; MCP tool schemas in the common subset.
-**Acceptance:** a harness drives `start_auth(mode=login)` → polls `get_job` → `done` with
-`bundle_ref`/`recording_ref` it can read as MCP resources (never inline payloads); a cancelled job
-reports `failed{cancelled}` and releases the lock; `export_session` re-imports and is
-authenticated; concurrent `start_auth` for different accounts run isolated while a second op on the
-*same* account is rejected by the lock; CLI and MCP produce identical audit trails.
-**Demo:** harness: `start_auth` → `get_job` (done) → reads `bundle_ref` resource →
-`export_session`; bundle loads elsewhere.
-**Effort:** M.
-
-## M3 — Signup + verification (CLI prompt, MCP pending/answer, TOTP)
-**Scope:** `Authenticator` mode=signup running the **signup sequence** — signup with an
-operator-provided **email + password** and **optional profile** (else generated incidental fields)
-→ **verify** (link/code) → **log in if the app did not authenticate us after verification**;
-**account-exists → switch to login**; **SSO-only → `failed{sso_only}`** fast; `signup_url` hint +
-signup entrypoint discovery; the full flow-variant set (single-page, multi-step, modal/iframe,
-magic-link, email/SMS OTP, TOTP); **`VerificationProvider`** with **built-in TOTP** + **CLI
-prompt** impls, **`since`/`deadline`**, **resend**, result **`Code | Link | Approved`**; channel
-detection + hint extraction; over MCP the **async pending/answer** pattern (`needs_verification` →
-`resolve_challenge`); form-error recovery.
-**Acceptance:** against ≥3 lab apps (incl. an email-OTP, a TOTP, and a "verify-then-login" flow),
-the agent signs up + verifies + ends authenticated ≥85% of attempts; incidental fields come from a
-profile and (with none) are generated; CLI prompt handles email/SMS OTP incl. a **resend**;
-built-in TOTP handles authenticator prompts; over MCP a job surfaces `needs_verification` and
-resumes on `resolve_challenge`; an account-exists signup switches to login; an SSO-only mock fails
-fast with `sso_only` rather than looping.
-**Demo:** `start_auth(mode=signup)` → `needs_verification{email}` → harness answers emailed OTP →
-`done{bundle}`.
-**Effort:** L.
-
-## M4 — CAPTCHA chain (testmode + external gRPC) + human handoff on block
-**Scope:** core `Detector` per vendor (reCAPTCHA v2/v3, hCaptcha, Turnstile, Arkose, custom) incl.
-invisible/score; core `Injector`; `Resolver` with a `Describe()`-prefiltered chain, Budget caps,
-flow-handler-owned submit + `Outcome`, **fresh-challenge re-detection per retry**, and `Exhausted`;
-in-process **`testmode`** + **`vision`** solvers; **go-plugin/gRPC** host + `.proto` + a **mock
-external solver** + **conformance suite**; **`HumanHandoff` for any dead end** (CAPTCHA exhausted,
-block page, challenge loop, unknown flow, stuck after N steps) — headful or **remote view that is
-localhost-bound or one-time-token protected** + notification → over MCP
-`needs_human{challenge_id, view_url, reason}` resolved by `resolve_challenge(id, done)`;
-`handoff_timeout` on expiry.
-**Acceptance:** classifies all five vendor types incl. invisible ones ≥95% in the lab; the chain
-applies each `Result` type via the Injector, caps cost/solves, re-detects a fresh challenge on
-rejection; the mock gRPC solver loads + passes conformance; scripted **block**, **unknown-flow** and
-**stuck** scenarios each escalate to `needs_human` with the correct `reason` and resume on the
-operator's signal; an unanswered handoff fails with `handoff_timeout` and releases the lock; the
-remote `view_url` is unreachable without its token and the token is dead after resolution; every
-step audited.
-**Demo:** `start_auth` on a lab app with a test reCAPTCHA → testmode solves; a block scenario →
-`needs_human{view_url, reason: block_page}` → operator opens the tokenised view, acts, signals
-done → flow completes.
-**Effort:** L.
-
-## M5 — Phase 2: authenticated crawl (design in ARCHITECTURE §9)
-**Scope:** `Explorer` starting from a SessionBundle — navigate, open items, fill+submit forms,
-paginate; **simhash state dedup** (collapse `/item/{id}`); **stop condition** (budget, or no new
-states for N iterations); **mid-crawl session loss → re-login → restart sub-goal**; the
-**account-safety deny-list** at an action-execution boundary (logout, delete account, change creds,
-revoke sessions) so the crawl can't log itself out. Still **no scope allowlist**.
-**Acceptance:** on an authenticated lab app the agent visits ≥N distinct real views without looping
-(dedup below a set re-visit ratio), keeps the session alive across a forced mid-crawl logout
-(auto re-login, sub-goal restarts), and never triggers an account-safety action (a planted logout
-control is skipped and recorded).
-**Demo:** feed a bundle to the crawler → it uses several features; kill the session mid-run → it
-re-logs-in and continues.
-**Effort:** XL.
+| Lab app | Exercises |
+|---|---|
+| `simple` | single-page login form, cookie session, `/api/me` |
+| `multistep` | email → password on separate views |
+| `modal` | login in a modal opened from a header button; no `/login` route |
+| `iframe` | login form inside an iframe |
+| `spa-jwt` | SPA (vanilla JS), JWT in localStorage, sent as `Authorization: Bearer` on XHR |
+| `hidden-entry` | login only reachable via a non-obvious link text (forces discovery/LLM fallback) |
+| `signup-verify` | signup → email code (lab inbox) → must log in after verifying |
+| `magic-link` | passwordless, link via lab inbox |
+| `otp-sms` | SMS-style OTP via lab inbox |
+| `totp` | TOTP MFA with a known seed |
+| `form-errors` | rejects first submit (validation error, weak password, "account exists") |
+| `captcha-mock` | mock CAPTCHA widget with a sitekey and a verify endpoint (accepts a lab test token) |
+| `captcha-block` | always re-challenges / shows a block page (forces human handoff) |
+| `sso-only` | only "Sign in with …" buttons (must fail `sso_only`) |
+| `bound-session` | rejects requests lacking a JS-computed per-request header (`replayable:false`) |
+| `crawl` (M5) | nav menu, paginated list, item pages, a form, logout link, delete-account button, session expiring after X requests |
 
 ---
 
-## Sequencing notes
-- **M1 is the gate.** If provided-cred login + a usable bundle/recording don't land on one app,
-  revisit perception/flow-handler design before adding the MCP surface.
-- **Spikes before the dependent milestone:** stable a11y handles under SPA re-render (before M3);
-  7–8B local model + grammar ladder (during provider work); simhash threshold (before M5).
+## M1 — Login + session handback (CLI)
+- go-rod browser layer with a persistent profile per account; optional upstream proxy setting.
+- A11y-tree perceiver; set-of-marks escalation stubbed behind its interface.
+- Model abstraction: `LLMProvider` interface, **mock provider**, one real provider
+  (OpenAI-compatible, also covers Ollama/vLLM), and the router.
+- Entrypoint discovery (§6.0): hints → cache → link/path/modal probe → LLM fallback.
+- Login flow handlers: single-page, multi-step, modal, iframe.
+- Success detection (§6.3), session restore (§6.4).
+- AuthRecorder with post-login capture window, SessionBundle, replayability check (§7.4),
+  artefact writer.
+- Credential store (encrypted at rest; key from env var), audit log with redaction, budgets.
+- CLI: `agentbrowser auth --target --account --mode login [--login-url]`, `export-session`.
 
-## Benchmark lab
-Juice Shop (SPA, modal login), crAPI (OTP, roles), DVWA (classic forms), plus mocks: multi-step
-signup, email-OTP, magic-link, TOTP MFA, login-in-a-modal/iframe, test-mode CAPTCHA, a block/
-challenge-loop scenario, session expiry. Metrics (per model): auth success rate, steps/tokens/cost
-per success, bundle-reuse success (re-import lands authenticated), human-handoff trigger accuracy,
-runtime.
+**Accept:** e2e passes against `simple`, `multistep`, `modal`, `iframe`, `spa-jwt`, `hidden-entry`,
+`bound-session`. Second run restores the session without logging in. Bundle contains the bearer
+header for `spa-jwt`. `bound-session` → `replayable:false` with a reason; others →
+`replayable:true`. Audit log contains no plaintext passwords or tokens (test greps for them).
+
+## M2 — Job-based MCP server
+- JobManager with per-account lock and job states from §8.
+- MCP server (stdio transport first; streamable HTTP optional) exposing `start_auth`, `get_job`,
+  `resolve_challenge`, `cancel_job`, `export_session`. Artefacts returned as resource URIs.
+
+**Accept:** an MCP client test drives a full login via the tools; concurrent `start_auth` on the
+same account is serialised; `cancel_job` cleans up the browser context.
+
+## M3 — Signup + verification
+- Signup flow with operator profile / generated incidental fields; "account exists" → login;
+  signup → verify → login.
+- VerificationProvider implementations: CLI prompt, MCP pending/answer (`needs_verification` →
+  `resolve_challenge`), webhook, built-in TOTP, and `labinbox` for tests. `since`, `deadline`,
+  `Resend`.
+- Form-error recovery.
+- SSO-only detection → `failed{reason: sso_only}`.
+
+**Accept:** e2e passes against `signup-verify`, `magic-link`, `otp-sms`, `totp`, `form-errors`,
+`sso-only`, both via CLI and via MCP (with the test acting as the harness answering
+`needs_verification`).
+
+## M4 — CAPTCHA + human handoff
+- Core Detector/Injector (mock vendor first; then reCAPTCHA v2, hCaptcha and Turnstile detectors
+  based on DOM/script/network signatures, with unit tests on saved HTML fixtures).
+- Resolver: `Describe()` once at load, prefiltered chain, budget, `Outcome()`, fresh challenge per
+  retry.
+- Solvers: in-process `testmode`, `vision` (via ModelRouter; mock-tested), go-plugin/gRPC host +
+  `.proto` + **mock external solver plugin** + conformance test suite.
+- HumanHandoff for any dead end: headful mode, remote view bound to localhost or one-time token,
+  notification hook, `needs_human` → `resolve_challenge(done)`; handoff timeout →
+  `failed{handoff_timeout}`.
+
+**Accept:** `captcha-mock` solved via `testmode` and via the mock gRPC plugin; `captcha-block`
+escalates to `needs_human`, and a test that completes the challenge through the remote view and
+calls `resolve_challenge` gets `done`; stuck/unknown-flow escalation covered by a test; conformance
+suite passes for the mock plugin.
+
+## M5 — Phase 2: authenticated crawl
+- Explorer per ARCHITECTURE §9: start from a SessionBundle, navigate, open items, fill and submit
+  forms with sensible data, paginate; simhash state dedup collapsing parameterised routes; stop on
+  budget or no new states for N iterations.
+- Account-safety deny-list at an action-execution boundary (logout, delete account, change
+  password/email, revoke sessions/API keys).
+- Mid-crawl session loss → re-login → restart in-flight sub-goal.
+- `crawl` lab app; CLI `agentbrowser crawl` and MCP `start_crawl` job.
+
+**Accept:** crawl reaches all ground-truth states of the `crawl` app, never clicks logout or
+delete-account, survives the forced session expiry, terminates on plateau.
+
+## M6 — Hardening & docs
+- Eval harness: run all lab e2e scenarios per configured model, output a results table (success
+  rate, steps, tokens, cost, time).
+- Real-provider adapters for Anthropic and Gemini (compiled and unit-tested with recorded
+  responses; live tests only when keys are present).
+- README: install, config reference, CLI and MCP usage, writing a solver plugin, writing a
+  VerificationProvider, security notes on artefacts.
+- Final pass: remove dead code, `make lint test e2e` green, PROGRESS.md "complete" with deferred items.

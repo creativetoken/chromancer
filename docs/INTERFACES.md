@@ -6,10 +6,11 @@
 > budget/kill-switch deadline and the run/trace IDs. **No ScopeGuard/Executor in v1** (no scope
 > enforcement, no deny-list — the deny-list returns in Phase 2, §ARCHITECTURE 9).
 
-Primary: `LLMProvider`, `ModelRouter`, `Perceiver`, `Authenticator`, `EntrypointDiscovery`,
-`FlowHandler`, `VerificationProvider`, `Detector`, `Injector`, `Resolver`, `Solver` (+ `.proto`),
-`HumanHandoff`, `SessionBundle`, `AuthRecorder`, `ReplayabilityCheck`, `ArtefactWriter`,
-`JobManager`. Supporting: credential store, `Budget`, audit `Log`, `Browser`/`Page`.
+Interfaces: `JobManager`, `Authenticator`, `EntrypointDiscovery`, `FlowHandler`, `SuccessDetector`,
+`VerificationProvider`, `Detector`, `Injector`, `Resolver`, `Solver` (+ `.proto`), `HumanHandoff`,
+`AuthRecorder`, `SessionBundle`, `ReplayChecker`, `ArtefactWriter`, `CredentialStore`, `Perceiver`,
+`LLMProvider`, `ModelRouter`, `Budget`, `AuditLog`. Supporting: `Browser`/`Page`, `Skill`,
+`Planner`, `Verifier`.
 
 ---
 
@@ -459,12 +460,12 @@ type AuthRecording struct {
     Format  string     // "har-1.2-json"
 }
 
-// ReplayabilityCheck answers "can the caller use plain HTTP with this bundle, or must it keep a
+// ReplayChecker answers "can the caller use plain HTTP with this bundle, or must it keep a
 // browser?" It picks one captured authenticated XHR (GET preferred, e.g. the /me-style request) and
 // replays it with a plain Go HTTP client using ONLY the bundle's cookies + headers. Same status and
 // an equivalent body ⇒ replayable; else a reason (TLS/client fingerprinting, request signing, DPoP/
 // proof-of-possession, JS-computed per-request headers, IP/proxy-bound session).
-type ReplayabilityCheck interface {
+type ReplayChecker interface {
     Check(ctx context.Context, b SessionBundle, rec AuthRecording) (replayable bool, reason string, err error)
 }
 
@@ -570,9 +571,9 @@ type Credentials struct {
 // never generated — only these incidental fields.
 type Profile struct { Fields map[string]string }
 
-// Store holds operator credentials + optional profile per account, encrypted at rest. Each account
-// uses its own persistent browser profile. No identity generation.
-type Store interface {
+// CredentialStore holds operator credentials + optional profile per account, encrypted at rest
+// (key from an env var). Each account uses its own persistent browser profile. No identity generation.
+type CredentialStore interface {
     PutCredentials(ctx context.Context, target string, account AccountID, creds Credentials) error
     GetCredentials(ctx context.Context, account AccountID) (Credentials, error)
     PutProfile(ctx context.Context, account AccountID, p Profile) error
@@ -622,10 +623,10 @@ type Page interface {
 ```go
 package audit
 
-// Log is an append-only, hash-chained record of every action, request, LLM decision and auth
+// AuditLog is an append-only, hash-chained record of every action, request, LLM decision and auth
 // event — redacted BEFORE write (the flow carries live credentials/tokens). A failed append trips
 // the kill-switch. The SessionBundle/AuthRecording are never written to the log in clear.
-type Log interface {
+type AuditLog interface {
     Append(ctx context.Context, e Entry) (EntryID, error) // e redacted before persistence
     Redact(e Entry) Entry
     Query(ctx context.Context, f Filter) ([]Entry, error)

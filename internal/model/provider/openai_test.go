@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"agentbrowser/internal/model"
+	"github.com/creativetoken/chromancer/internal/model"
 )
 
 func TestOpenAICompatStructuredWithRepair(t *testing.T) {

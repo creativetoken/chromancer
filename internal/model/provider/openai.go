@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"agentbrowser/internal/model"
+	"github.com/creativetoken/chromancer/internal/model"
 )
 
 // OpenAICompat talks to any OpenAI-compatible chat-completions endpoint

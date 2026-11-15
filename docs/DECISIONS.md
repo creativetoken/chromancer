@@ -3,8 +3,21 @@
 > One line per decision made autonomously: date · decision · why · alternatives considered.
 > Design-level changes also update the affected section of `docs/ARCHITECTURE.md`.
 
-- 2026-11-15 · **Module path `agentbrowser`** (no host prefix) · private, unpublished module; keeps
-  imports short · alt: a guessed GitHub path (wrong handle risk), `example.com/…` (misleading).
+- 2026-11-15 · **Module path `github.com/creativetoken/chromancer`** (repo provided by operator
+  mid-build; initially `agentbrowser`) · matches the real remote so `go get` works · binaries keep
+  the spec'd names `agentbrowser` / `authlab`.
+- 2026-11-15 · **Lab app code lives in `internal/lab` (not `testdata/lab/`)** · Go tooling ignores
+  `testdata/` directories, so the lab binary can't be built from there; `testdata/lab/` holds HTML
+  fixtures only · alt: a separate module under testdata (awkward).
+- 2026-11-15 · **v1 persistence is file-based, not SQLite**: JSONL hash-chained audit log, secretbox-
+  encrypted creds/session files, artefact files in the per-account workspace · the v1 data set is tiny
+  and artefacts are by-reference anyway; avoids a heavy pure-Go SQLite compile · alt: modernc sqlite
+  (ADR 0006 — revisit if Phase 2 needs relational queries).
+- 2026-11-15 · **Perception via an injected DOM walk computing accessible names** (aria-label →
+  labelledby → label[for] → placeholder → text), tagging nodes with `data-ab-handle`, run in the main
+  frame and each iframe · handles must map back to actable elements across frames, which CDP
+  `Accessibility.getFullAXTree` doesn't give directly · alt: CDP AX tree + backend-node lookup (more
+  moving parts).
 - 2026-11-15 · **Proto generation via go-installed `buf` + `protoc-gen-go`/`protoc-gen-go-grpc`**,
   no system `protoc` · `protoc` isn't installed and `buf` compiles protos itself · alt: brew
   install protobuf (system dependency), hand-maintained `.pb.go` (fragile).

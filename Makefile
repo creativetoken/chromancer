@@ -32,6 +32,11 @@ lab:
 e2e:
 	AGENTBROWSER_E2E=1 $(GO) test -count=1 -timeout 20m -run 'E2E' ./e2e/...
 
+## live: read-only smoke tests vs real Twilio/Gmail (loads .env.live; prints no values)
+live:
+	@set -a; [ -f .env.live ] && . ./.env.live; set +a; \
+	$(GO) test -tags live -run 'Live' -v -count=1 ./internal/verify/...
+
 tidy:
 	$(GO) mod tidy
 

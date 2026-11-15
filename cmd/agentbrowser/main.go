@@ -45,6 +45,10 @@ func main() {
 		err = cmdEval(ctx, os.Args[2:])
 	case "mcp":
 		err = cmdMCP(ctx, os.Args[2:])
+	case "mailbox":
+		err = cmdMailbox(ctx, os.Args[2:])
+	case "verify":
+		err = cmdVerify(ctx, os.Args[2:])
 	case "newkey":
 		k, e := identity.NewRandomKey()
 		if e != nil {

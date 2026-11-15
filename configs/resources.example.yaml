@@ -1,0 +1,38 @@
+# Operator verification resources. Secrets are referenced by ENV VAR NAME only
+# (never put real numbers, addresses, tokens or passwords in this file).
+# Point AGENTBROWSER_RESOURCES at a copy of this file.
+resources:
+  phones:
+    - id: twilio-1
+      number_env: TWILIO_NUMBER_1   # E.164 number, from the environment
+      provider: twilio
+    - id: twilio-2
+      number_env: TWILIO_NUMBER_2
+      provider: twilio
+  mailboxes:
+    - id: gmail-main
+      host: imap.gmail.com
+      auth: oauth2                  # Gmail: XOAUTH2 (run `agentbrowser mailbox login`)
+      username_env: GMAIL_USER
+      oauth_client_id_env: GMAIL_OAUTH_CLIENT_ID
+      oauth_client_secret_env: GMAIL_OAUTH_CLIENT_SECRET
+      address_envs:                 # the alias addresses that land in this mailbox
+        - GMAIL_ALIAS_1
+        - GMAIL_ALIAS_2
+
+providers:
+  twilio:
+    account_sid_env: TWILIO_ACCOUNT_SID
+    auth_token_env: TWILIO_AUTH_TOKEN
+    poll_interval: 3s
+
+accounts:
+  - id: acct-a
+    email_env: GMAIL_ALIAS_1        # resolves to the gmail-main mailbox
+    phone: twilio-1
+  - id: acct-b
+    email_env: GMAIL_ALIAS_2
+    phone: twilio-2
+
+totp:
+  enroll_when_prompted: true

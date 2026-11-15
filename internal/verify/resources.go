@@ -22,22 +22,72 @@ type Resources struct {
 	TOTP      TOTPGlobal   `yaml:"-"`
 }
 
-// Phone is one SMS number.
+// Phone is one SMS number. The number may be given literally or by env var.
 type Phone struct {
-	ID       string `yaml:"id"`
-	Number   string `yaml:"number"` // E.164
-	Provider string `yaml:"provider"`
+	ID        string `yaml:"id"`
+	Number    string `yaml:"number"`     // E.164 (literal)
+	NumberEnv string `yaml:"number_env"` // or the env var holding it
+	Provider  string `yaml:"provider"`
+}
+
+// Resolve returns the effective E.164 number.
+func (p Phone) Resolve() string { return envOr(p.Number, p.NumberEnv) }
+
+func envOr(literal, envName string) string {
+	if envName != "" {
+		if v := os.Getenv(envName); v != "" {
+			return v
+		}
+	}
+	return literal
 }
 
 // Mailbox is one IMAP mailbox and the alias addresses that land in it.
 type Mailbox struct {
-	ID          string   `yaml:"id"`
-	Provider    string   `yaml:"provider"`
-	Host        string   `yaml:"host"`
-	Port        int      `yaml:"port"`
-	UsernameEnv string   `yaml:"username_env"`
-	PasswordEnv string   `yaml:"password_env"`
-	Addresses   []string `yaml:"addresses"`
+	ID                   string   `yaml:"id"`
+	Provider             string   `yaml:"provider"`
+	Host                 string   `yaml:"host"`
+	Port                 int      `yaml:"port"`
+	Auth                 string   `yaml:"auth"` // oauth2 | app_password | password
+	UsernameEnv          string   `yaml:"username_env"`
+	PasswordEnv          string   `yaml:"password_env"`
+	OAuthClientIDEnv     string   `yaml:"oauth_client_id_env"`
+	OAuthClientSecretEnv string   `yaml:"oauth_client_secret_env"`
+	Addresses            []string `yaml:"addresses"`    // literal alias addresses
+	AddressEnvs          []string `yaml:"address_envs"` // or env vars holding them
+}
+
+// ResolvedAddresses returns the mailbox's alias addresses (literals + env).
+func (m Mailbox) ResolvedAddresses() []string {
+	out := append([]string(nil), m.Addresses...)
+	for _, e := range m.AddressEnvs {
+		if v := os.Getenv(e); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// Auth modes.
+const (
+	AuthOAuth2      = "oauth2"
+	AuthAppPassword = "app_password"
+	AuthPassword    = "password"
+)
+
+// IsGmail reports whether this mailbox is on Gmail's IMAP host.
+func (m Mailbox) IsGmail() bool { return strings.EqualFold(m.Host, "imap.gmail.com") }
+
+// AuthMode returns the effective auth mode (oauth2 is the default for Gmail,
+// plain password for other hosts).
+func (m Mailbox) AuthMode() string {
+	if m.Auth != "" {
+		return strings.ToLower(m.Auth)
+	}
+	if m.IsGmail() {
+		return AuthOAuth2
+	}
+	return AuthPassword
 }
 
 // TwilioConfig is the Twilio provider credentials (by env-var name).
@@ -56,11 +106,15 @@ type AccountTOTP struct {
 // Account references the resources it uses.
 type Account struct {
 	ID          string        `yaml:"id"`
-	Email       string        `yaml:"email"`
-	Phone       string        `yaml:"phone"` // phone id
+	Email       string        `yaml:"email"`     // literal alias address
+	EmailEnv    string        `yaml:"email_env"` // or the env var holding it
+	Phone       string        `yaml:"phone"`     // phone id
 	PasswordEnv string        `yaml:"password_env"`
 	TOTP        []AccountTOTP `yaml:"totp"`
 }
+
+// ResolveEmail returns the account's alias address.
+func (a Account) ResolveEmail() string { return envOr(a.Email, a.EmailEnv) }
 
 // TOTPGlobal holds module-wide TOTP options.
 type TOTPGlobal struct {
@@ -114,8 +168,11 @@ func (r *Resources) PollInterval() time.Duration {
 // MailboxForAddress returns the mailbox that receives address (case-insensitive).
 func (r *Resources) MailboxForAddress(addr string) (*Mailbox, bool) {
 	addr = strings.ToLower(strings.TrimSpace(addr))
+	if addr == "" {
+		return nil, false
+	}
 	for i := range r.Mailboxes {
-		for _, a := range r.Mailboxes[i].Addresses {
+		for _, a := range r.Mailboxes[i].ResolvedAddresses() {
 			if strings.ToLower(strings.TrimSpace(a)) == addr {
 				return &r.Mailboxes[i], true
 			}
@@ -147,10 +204,11 @@ func (r *Resources) AccountByID(id string) (*Account, bool) {
 // Validate checks the config is internally consistent and that every referenced
 // environment variable is set. It never reads or prints a secret value.
 func (r *Resources) Validate() error {
+	need := map[string]string{} // env name -> why (verified set at the end)
 	ids := map[string]bool{}
 	for _, p := range r.Phones {
-		if p.ID == "" || p.Number == "" {
-			return fmt.Errorf("resources: phone needs id and number")
+		if p.ID == "" || (p.Number == "" && p.NumberEnv == "") {
+			return fmt.Errorf("resources: phone %q needs id and number (or number_env)", p.ID)
 		}
 		if ids[p.ID] {
 			return fmt.Errorf("resources: duplicate phone id %q", p.ID)
@@ -159,27 +217,40 @@ func (r *Resources) Validate() error {
 	}
 	mids := map[string]bool{}
 	for _, m := range r.Mailboxes {
-		if m.ID == "" || m.Host == "" || len(m.Addresses) == 0 {
-			return fmt.Errorf("resources: mailbox %q needs id, host and at least one address", m.ID)
+		if m.ID == "" || m.Host == "" || len(m.Addresses)+len(m.AddressEnvs) == 0 {
+			return fmt.Errorf("resources: mailbox %q needs id, host and at least one address (or address_envs)", m.ID)
+		}
+		for _, e := range m.AddressEnvs {
+			need[e] = "mailbox " + m.ID + " alias address"
 		}
 		if mids[m.ID] {
 			return fmt.Errorf("resources: duplicate mailbox id %q", m.ID)
 		}
 		mids[m.ID] = true
+		mode := m.AuthMode()
+		switch mode {
+		case AuthOAuth2, AuthAppPassword, AuthPassword:
+		default:
+			return fmt.Errorf("resources: mailbox %q has unknown auth %q (use oauth2|app_password|password)", m.ID, m.Auth)
+		}
+		if mode == AuthPassword && m.IsGmail() {
+			return fmt.Errorf("resources: mailbox %q: Gmail does not accept a password over IMAP (less-secure app access was removed); use auth: oauth2 (or app_password)", m.ID)
+		}
 	}
-	// Each address maps to exactly one mailbox.
+	// Each resolved address maps to exactly one mailbox (empties skipped).
 	seen := map[string]string{}
 	for _, m := range r.Mailboxes {
-		for _, a := range m.Addresses {
+		for _, a := range m.ResolvedAddresses() {
 			a = strings.ToLower(strings.TrimSpace(a))
-			if prev, ok := seen[a]; ok {
-				return fmt.Errorf("resources: address %q is claimed by mailboxes %q and %q", a, prev, m.ID)
+			if a == "" {
+				continue
+			}
+			if prev, ok := seen[a]; ok && prev != m.ID {
+				return fmt.Errorf("resources: an address is claimed by mailboxes %q and %q", prev, m.ID)
 			}
 			seen[a] = m.ID
 		}
 	}
-	// Collect the env vars that must be set, based on what accounts actually use.
-	need := map[string]string{} // env name -> why
 	usesTwilio := false
 	for _, acc := range r.Accounts {
 		if acc.ID == "" {
@@ -188,22 +259,38 @@ func (r *Resources) Validate() error {
 		if acc.PasswordEnv != "" {
 			need[acc.PasswordEnv] = "account " + acc.ID + " password"
 		}
-		if acc.Email != "" {
-			mb, ok := r.MailboxForAddress(acc.Email)
+		if acc.EmailEnv != "" {
+			need[acc.EmailEnv] = "account " + acc.ID + " email address"
+		}
+		if email := acc.ResolveEmail(); email != "" {
+			mb, ok := r.MailboxForAddress(email)
 			if !ok {
-				return fmt.Errorf("resources: account %q email %q maps to no mailbox", acc.ID, acc.Email)
+				return fmt.Errorf("resources: account %q email maps to no mailbox", acc.ID)
 			}
 			if mb.UsernameEnv != "" {
 				need[mb.UsernameEnv] = "mailbox " + mb.ID + " username"
 			}
-			if mb.PasswordEnv != "" {
-				need[mb.PasswordEnv] = "mailbox " + mb.ID + " password"
+			switch mb.AuthMode() {
+			case AuthOAuth2:
+				if mb.OAuthClientIDEnv == "" || mb.OAuthClientSecretEnv == "" {
+					return fmt.Errorf("resources: mailbox %q (oauth2) needs oauth_client_id_env and oauth_client_secret_env", mb.ID)
+				}
+				need[mb.OAuthClientIDEnv] = "mailbox " + mb.ID + " oauth client id"
+				need[mb.OAuthClientSecretEnv] = "mailbox " + mb.ID + " oauth client secret"
+				// The refresh token comes from `mailbox login`, not an env var.
+			default: // app_password | password
+				if mb.PasswordEnv != "" {
+					need[mb.PasswordEnv] = "mailbox " + mb.ID + " password"
+				}
 			}
 		}
 		if acc.Phone != "" {
 			ph, ok := r.PhoneByID(acc.Phone)
 			if !ok {
 				return fmt.Errorf("resources: account %q references unknown phone %q", acc.ID, acc.Phone)
+			}
+			if ph.NumberEnv != "" {
+				need[ph.NumberEnv] = "phone " + ph.ID + " number"
 			}
 			if ph.Provider == "twilio" || ph.Provider == "" {
 				usesTwilio = true

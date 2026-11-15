@@ -6,14 +6,26 @@
 - [ ] **V1 — identity resources + config + shared extraction/claiming.** YAML resources (phones,
   mailboxes, providers, accounts, totp), startup validation (fail fast, never print secrets);
   deterministic code + link extractors; claimed-message store.
-- [ ] **V2 — Twilio SMS provider** (REST poll + optional signed webhook, matching, extraction,
-  claim, resend, phone_rejected) vs an httptest mock Twilio API.
-- [ ] **V3 — Gmail IMAP provider** (shared conn per mailbox, IDLE/poll, narrow search, alias
-  separation, MIME, code/link, claim-once) vs an in-memory IMAP server.
-- [ ] **V3b — TOTP provider** (otpauth parsing, SHA1/256/512, 6/8 digits, 30/60s, boundary guard,
-  skew retry, per-digit boxes, enrolment capture via QR decode, get_totp tool).
-- [ ] **V4 — routing + fallback chain + agent/MCP tools (read_sms/read_email) + CLI verify test.**
-- [ ] **V5 — live smoke tests (build tag), docs, tag `verification-v1`.**
+- [x] **V2 — Twilio SMS provider** (REST poll + signed webhook, matching, extraction, claim,
+  resend, phone_rejected) vs an httptest mock Twilio API.
+- [x] **V3 — Gmail IMAP provider** (shared conn per mailbox + NOOP health check + retry, junk-folder
+  auto-discovery, narrow search, alias separation, MIME, code/link, claim-once) vs an in-memory IMAP
+  server. Modelled on `ai-hackbot/internal/mailbox`. OAuth2 XOAUTH2 (default for Gmail) +
+  app_password + password modes; `agentbrowser mailbox login` (loopback+PKCE, refresh token stored
+  encrypted); config rejects `password` for Gmail.
+- [x] **V3b — TOTP provider** (otpauth parsing, SHA1/256/512, 6/8 digits, 30/60s, boundary guard,
+  skew retry, CurrentCode tool, QR decode for enrolment). *Still to do: per-digit input boxes +
+  method picker + full enrolment-capture flow + lab app + e2e.*
+- [~] **V4 — wiring.** Chain builder (TOTP→Twilio→IMAP) from resources; `verify test` and
+  `mailbox login` CLI commands. *Still to do: Authenticator channel routing + fallback chain + MCP/LLM
+  read_sms/read_email tools.*
+- [~] **V5 — live smoke tests + `make live` (read-only, prints only counts/timings).** Docs + tag pending.
+
+### Live validation (no values recorded)
+- `make live`: twilio-1 connected, 6 recent inbound, extractor found a code in 3/6 (329ms);
+  twilio-2 connected, 0 recent inbound; Gmail skipped (no app password / OAuth client configured).
+- `verify test`: acct-a/sms PASS (got a code) in 228ms; acct-b/sms FAIL (timed out, 0 recent inbound);
+  email UNSUPPORTED (Gmail auth not configured); totp UNSUPPORTED (no seed configured).
 
 ## CAPTCHA module: **complete** — C1–C5 built, tested, tagged `captcha-v1`. Automated solving is the norm; human handoff is the last resort.
 - [x] **C1 — detection & parameter extraction.** Unified detector + pure classifier shared by a

@@ -19,11 +19,20 @@ type MailboxDef struct {
 	ID   string
 	Host string
 	Port int
+	Auth string // oauth2 | app_password | password ("" = password)
 	User string
-	Pass string
+	Pass string // app password or plain password
+	// AccessToken returns a fresh OAuth access token (oauth2 mailboxes only).
+	AccessToken func() (string, error)
 }
 
-func (m MailboxDef) addr() string { return fmt.Sprintf("%s:%d", m.Host, m.Port) }
+func (m MailboxDef) addr() string {
+	port := m.Port
+	if port == 0 {
+		port = 993
+	}
+	return fmt.Sprintf("%s:%d", m.Host, port)
+}
 
 // IMAPProvider reads verification email for an account from a Gmail-style
 // mailbox. One mailbox can receive several alias addresses; a single connection
@@ -58,13 +67,6 @@ func (p *IMAPProvider) Supports(ch Channel, account string) bool {
 
 // Resend is a no-op (the flow handler clicks resend).
 func (p *IMAPProvider) Resend(context.Context, Request) error { return nil }
-
-func (p *IMAPProvider) folders() []string {
-	if len(p.Folders) > 0 {
-		return p.Folders
-	}
-	return []string{"INBOX", "[Gmail]/Spam"}
-}
 
 func (p *IMAPProvider) conn(mb MailboxDef) *mailboxConn {
 	p.mu.Lock()
@@ -101,8 +103,12 @@ func (p *IMAPProvider) GetCode(ctx context.Context, req Request) (Result, error)
 	if p.TargetHint != nil {
 		domain = p.TargetHint(req.Account)
 	}
+	folders := p.Folders
+	if len(folders) == 0 {
+		folders = conn.folders() // INBOX + the discovered spam/junk folder
+	}
 	for {
-		for _, folder := range p.folders() {
+		for _, folder := range folders {
 			msgs, err := conn.fetchRecent(folder, since)
 			if err != nil {
 				continue
@@ -167,6 +173,22 @@ func defaultDial(mb MailboxDef) (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(mb.Auth, "oauth2") {
+		if mb.AccessToken == nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("imap: oauth2 mailbox %q has no token source (run `agentbrowser mailbox login`)", mb.ID)
+		}
+		tok, err := mb.AccessToken()
+		if err != nil {
+			_ = c.Logout()
+			return nil, err
+		}
+		if err := c.Authenticate(NewXOAUTH2(mb.User, tok)); err != nil {
+			_ = c.Logout()
+			return nil, err
+		}
+		return c, nil
+	}
 	if err := c.Login(mb.User, mb.Pass); err != nil {
 		_ = c.Logout()
 		return nil, err
@@ -174,17 +196,27 @@ func defaultDial(mb MailboxDef) (*client.Client, error) {
 	return c, nil
 }
 
-// mailboxConn is one shared, serialized IMAP connection with reconnect.
+// mailboxConn is one shared, serialized IMAP connection. A long-lived
+// connection reused across polls is more reliable against Gmail than dialing
+// fresh every time (which produces "unexpected EOF" under churn); liveness is
+// checked with a cheap NOOP and a dead connection is transparently redialed.
 type mailboxConn struct {
-	mu   sync.Mutex
-	mb   MailboxDef
-	cli  *client.Client
-	dial func(mb MailboxDef) (*client.Client, error)
+	mu       sync.Mutex
+	mb       MailboxDef
+	cli      *client.Client
+	dial     func(mb MailboxDef) (*client.Client, error)
+	junkOnce sync.Once
+	cache    []string // INBOX + discovered junk folder
 }
 
+// ensure returns a live client, NOOP-checking an existing one and redialing a
+// dead one.
 func (c *mailboxConn) ensure() error {
 	if c.cli != nil {
-		return nil
+		if err := c.cli.Noop(); err == nil {
+			return nil
+		}
+		c.drop() // dead connection; redial below
 	}
 	cli, err := c.dial(c.mb)
 	if err != nil {
@@ -201,21 +233,71 @@ func (c *mailboxConn) drop() {
 	}
 }
 
+// folders returns INBOX plus the account's spam/junk folder, discovered once
+// (verification mail for a new address often lands in spam).
+func (c *mailboxConn) folders() []string {
+	c.junkOnce.Do(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.cache = []string{"INBOX"}
+		if err := c.ensure(); err != nil {
+			return
+		}
+		if j := discoverJunk(c.cli); j != "" {
+			c.cache = append(c.cache, j)
+		}
+	})
+	return c.cache
+}
+
+var commonJunkNames = []string{"[Gmail]/Spam", "Spam", "Junk", "Junk E-mail", "Bulk Mail"}
+
+// discoverJunk finds the junk folder via the SPECIAL-USE attribute, falling back
+// to the names real providers use.
+func discoverJunk(cli *client.Client) string {
+	ch := make(chan *imap.MailboxInfo, 40)
+	done := make(chan error, 1)
+	go func() { done <- cli.List("", "*", ch) }()
+	names := map[string]bool{}
+	byAttr := ""
+	for mb := range ch {
+		names[mb.Name] = true
+		for _, a := range mb.Attributes {
+			if a == imap.JunkAttr {
+				byAttr = mb.Name
+			}
+		}
+	}
+	<-done
+	if byAttr != "" {
+		return byAttr
+	}
+	for _, n := range commonJunkNames {
+		if names[n] {
+			return n
+		}
+	}
+	return ""
+}
+
 // fetchRecent selects a folder and returns parsed messages since `since`,
-// reconnecting once if the connection has dropped.
+// retrying up to three times with backoff and redialing on a failed attempt.
 func (c *mailboxConn) fetchRecent(folder string, since time.Time) ([]parsedMsg, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out, err := c.fetchOnce(folder, since)
-	if err != nil {
-		// Reconnect and retry once.
-		c.drop()
-		if err2 := c.ensure(); err2 != nil {
-			return nil, err2
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			c.drop() // discard the known-bad connection before retrying
+			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 		}
-		return c.fetchOnce(folder, since)
+		out, err := c.fetchOnce(folder, since)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
 	}
-	return out, nil
+	return nil, lastErr
 }
 
 func (c *mailboxConn) fetchOnce(folder string, since time.Time) ([]parsedMsg, error) {

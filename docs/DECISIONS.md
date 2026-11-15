@@ -123,3 +123,15 @@
   date-range query encoding is fiddly and easy to get subtly wrong; fetching the recent page and
   filtering by parsed `date_sent >= since - skew` is simpler and robust · alt: server-side range
   (brittle across API/SDK versions).
+
+- 2026-11-15 · **Email provider lives in `internal/verify` as a flat file (`imap.go`), not a
+  sub-package** · every existing verification provider (TOTP, CLI, Webhook, Ask, LabInbox) is a
+  flat file implementing `verify.Provider` in that package; a `verify/imap` sub-package would be
+  inconsistent and force exported-type churn · modelled on the reference at
+  `ai-hackbot/internal/mailbox/mailbox.go`, adopting its robustness patterns (persistent
+  connection with a NOOP health check + redial, junk/spam folder auto-discovery via the
+  SPECIAL-USE extension with a common-name fallback, bounded retry with backoff).
+- 2026-11-15 · **Kept go-imap v1 (not the reference's v2)** · v1 ships an in-memory backend +
+  server used by our offline tests (alias separation, Spam, since, claim-once, reconnect); v2 has
+  no ready in-memory backend, so moving to it would mean rewriting those tests against a hand-rolled
+  server for no behavioural gain · the reference's lessons are transport-agnostic and applied on v1.

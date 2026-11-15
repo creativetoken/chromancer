@@ -21,6 +21,7 @@ resources:
       provider: imap
       host: imap.gmail.com
       port: 993
+      auth: app_password
       username_env: GMAIL_USER
       password_env: GMAIL_APP_PASSWORD
       addresses:
@@ -106,6 +107,43 @@ func TestLoadResourcesBad(t *testing.T) {
 				t.Fatalf("expected an error for %q", name)
 			}
 		})
+	}
+}
+
+func TestResourcesOAuth2Gmail(t *testing.T) {
+	for _, e := range []string{"GMAIL_USER", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "ACCT_A_PASSWORD", "ACCT_B_PASSWORD", "ACCT_A_EXAMPLE_TOTP"} {
+		t.Setenv(e, "x")
+	}
+	cfg := strings.Replace(goodConfig,
+		"      auth: app_password\n      username_env: GMAIL_USER\n      password_env: GMAIL_APP_PASSWORD",
+		"      auth: oauth2\n      username_env: GMAIL_USER\n      oauth_client_id_env: GOOGLE_CLIENT_ID\n      oauth_client_secret_env: GOOGLE_CLIENT_SECRET", 1)
+	r, err := LoadResources(writeCfg(t, cfg))
+	if err != nil {
+		t.Fatalf("oauth2 gmail config should load: %v", err)
+	}
+	mb, _ := r.MailboxForAddress("alias-one@gmail.com")
+	if mb.AuthMode() != AuthOAuth2 {
+		t.Fatalf("auth mode = %q, want oauth2", mb.AuthMode())
+	}
+}
+
+func TestResourcesRejectsPasswordForGmail(t *testing.T) {
+	setEnvs(t)
+	cfg := strings.Replace(goodConfig, "      auth: app_password", "      auth: password", 1)
+	_, err := LoadResources(writeCfg(t, cfg))
+	if err == nil || !strings.Contains(err.Error(), "Gmail does not accept a password") {
+		t.Fatalf("expected Gmail password rejection, got %v", err)
+	}
+}
+
+func TestResourcesGmailDefaultsToOAuth2(t *testing.T) {
+	setEnvs(t)
+	// Remove the explicit auth line: Gmail must default to oauth2 and then fail
+	// for want of the oauth client envs (proving the default, not app_password).
+	cfg := strings.Replace(goodConfig, "      auth: app_password\n", "", 1)
+	_, err := LoadResources(writeCfg(t, cfg))
+	if err == nil || !strings.Contains(err.Error(), "oauth_client_id_env") {
+		t.Fatalf("Gmail should default to oauth2, got %v", err)
 	}
 }
 

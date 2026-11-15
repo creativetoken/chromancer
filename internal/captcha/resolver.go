@@ -27,15 +27,37 @@ type chainResolver struct {
 	maxSolves  int
 	audit      audit.AuditLog
 	nativeWait time.Duration // how long to wait for a native click to fill the field
+	stats      *Stats        // optional per-(target,vendor,solver) stats
+	target     string        // label for stats keys
+	adaptive   bool          // reorder eligible solvers by observed success rate
 
 	mu       sync.Mutex
 	tried    map[string]int    // vendor+sitekey -> count of solvers tried
 	solverOf map[string]Solver // solveID -> solver (for Outcome)
+	solveVnd map[string]Vendor // solveID -> vendor (for stats)
 	seq      int
 }
 
+// ResolverOption configures the resolver.
+type ResolverOption func(*chainResolver)
+
+// WithStats records per-(target,vendor,solver) outcomes to the given store.
+func WithStats(s *Stats, target string) ResolverOption {
+	return func(r *chainResolver) { r.stats = s; r.target = target }
+}
+
+// WithAdaptiveOrder reorders eligible solvers by observed success rate.
+func WithAdaptiveOrder(on bool) ResolverOption {
+	return func(r *chainResolver) { r.adaptive = on }
+}
+
+// WithNativeWait sets how long to wait for a native click to fill the field.
+func WithNativeWait(d time.Duration) ResolverOption {
+	return func(r *chainResolver) { r.nativeWait = d }
+}
+
 // NewResolver builds a chainResolver. Describe() is called once per solver here.
-func NewResolver(solvers []Solver, injectors map[Vendor]Injector, budget Budget, maxSolves int, al audit.AuditLog) Resolver {
+func NewResolver(solvers []Solver, injectors map[Vendor]Injector, budget Budget, maxSolves int, al audit.AuditLog, opts ...ResolverOption) Resolver {
 	entries := make([]solverEntry, 0, len(solvers))
 	for _, s := range solvers {
 		entries = append(entries, solverEntry{s: s, caps: s.Describe()})
@@ -46,11 +68,15 @@ func NewResolver(solvers []Solver, injectors map[Vendor]Injector, budget Budget,
 	if maxSolves <= 0 {
 		maxSolves = 3
 	}
-	return &chainResolver{
+	r := &chainResolver{
 		entries: entries, injectors: injectors, budget: budget, maxSolves: maxSolves, audit: al,
 		nativeWait: 6 * time.Second,
-		tried:      map[string]int{}, solverOf: map[string]Solver{},
+		tried:      map[string]int{}, solverOf: map[string]Solver{}, solveVnd: map[string]Vendor{},
 	}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 func key(c Challenge) string { return string(c.Vendor) + "|" + c.SiteKey }
@@ -65,6 +91,14 @@ func (r *chainResolver) eligible(c Challenge) []solverEntry {
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if r.adaptive && r.stats != nil {
+			// Observed success rate first (ties fall through to cheaper/faster).
+			ri := r.stats.Rate(r.target, string(c.Vendor), out[i].s.Name())
+			rj := r.stats.Rate(r.target, string(c.Vendor), out[j].s.Name())
+			if ri != rj {
+				return ri > rj
+			}
+		}
 		if out[i].caps.EstCostUSD != out[j].caps.EstCostUSD {
 			return out[i].caps.EstCostUSD < out[j].caps.EstCostUSD
 		}
@@ -105,7 +139,9 @@ func (r *chainResolver) Resolve(ctx context.Context, p *browser.Page, c Challeng
 			return Result{}, err
 		}
 	}
+	t0 := time.Now()
 	res, err := entry.s.Solve(ctx, c)
+	latency := time.Since(t0).Milliseconds()
 	if err != nil {
 		r.logf("captcha_solve", map[string]any{"solver": entry.s.Name(), "vendor": string(c.Vendor), "error": err.Error()})
 		return Result{}, fmt.Errorf("captcha: solver %s: %w", entry.s.Name(), err)
@@ -116,8 +152,10 @@ func (r *chainResolver) Resolve(ctx context.Context, p *browser.Page, c Challeng
 	if r.budget != nil {
 		r.budget.Spend(1, entry.caps.EstCostUSD)
 	}
+	r.stats.RecordAttempt(r.target, string(c.Vendor), entry.s.Name(), latency, entry.caps.EstCostUSD)
 	r.mu.Lock()
 	r.solverOf[res.SolveID] = entry.s
+	r.solveVnd[res.SolveID] = c.Vendor
 	r.mu.Unlock()
 
 	if inj, ok := r.injectors[c.Vendor]; ok {
@@ -158,12 +196,19 @@ func waitFieldFilled(ctx context.Context, p *browser.Page, sel string, timeout t
 	}
 }
 
-// Outcome records whether the solve was accepted; forwarded to the solver's Report.
+// Outcome records whether the solve was accepted; forwarded to the solver's
+// Report and to the stats store (then persisted).
 func (r *chainResolver) Outcome(ctx context.Context, solveID string, accepted bool) error {
 	r.mu.Lock()
 	s := r.solverOf[solveID]
+	vnd := r.solveVnd[solveID]
+	delete(r.solveVnd, solveID)
 	r.mu.Unlock()
 	r.logf("captcha_outcome", map[string]any{"solve_id": solveID, "accepted": accepted})
+	if s != nil && r.stats != nil {
+		r.stats.RecordOutcome(r.target, string(vnd), s.Name(), accepted)
+		_ = r.stats.Save()
+	}
 	if s == nil {
 		return nil
 	}

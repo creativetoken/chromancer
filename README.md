@@ -70,6 +70,11 @@ agentbrowser mcp                     # run the MCP server over stdio
 agentbrowser newkey
 ```
 
+`agentbrowser eval --captcha` benchmarks the **CAPTCHA solver chain** against the mock vendor apps
+(`mock-recaptcha-v2/-invisible/-v3`, `mock-hcaptcha`, `mock-turnstile-managed/-invisible`,
+`text-captcha`, `image-grid`, …), printing per-`(vendor × solver)` solve rate, latency and cost.
+See `docs/CAPTCHA.md` for the chain, config and how to add a vendor.
+
 `agentbrowser eval` benchmarks the configured model against every lab auth scenario. Example
 (mock model, 1 run each):
 

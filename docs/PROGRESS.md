@@ -2,7 +2,7 @@
 
 > Single source of truth for resuming. On restart: read this file and `DECISIONS.md` first.
 
-## Active work: **CAPTCHA solving module (C1–C5)** — make automated solving the norm, human handoff the last resort.
+## Status: **complete** — CAPTCHA solving module (C1–C5) built, tested, tagged `captcha-v1`. Automated solving is the norm; human handoff is the last resort.
 - [x] **C1 — detection & parameter extraction.** Unified detector + pure classifier shared by a
   browser JS probe (computed visibility) and a pure-Go `x/net/html` probe. Classes: reCAPTCHA v2
   checkbox / invisible / v3 / Enterprise, hCaptcha, Turnstile (managed/invisible), Cloudflare
@@ -36,7 +36,12 @@
   budget exhaustion → `failed{budget_exhausted}`. Found+fixed two design gaps: captchaHook now
   advances through the chain on a decline (handoff only on exhaustion), and native declines cleanly
   when its click produces no token.
-- [ ] **C5 — eval (solve rate / time / cost per vendor×solver), `docs/CAPTCHA.md`, ARCHITECTURE §6.6 refresh, tag `captcha-v1`.**
+- [x] **C5 — eval + docs + polish.** `agentbrowser eval --captcha` runs the mock vendor apps through
+  the real chain and prints per-`(vendor × solver)` solve rate / median latency / cost from the
+  persisted `Stats` (vision rows need a real vision model; offline they show 0% as expected).
+  `docs/CAPTCHA.md` (detection, chain, config, writing a plugin, adding a vendor); ARCHITECTURE §6.6
+  implementation note; README eval section. Outcome accounting fixed (accepted on authenticated,
+  rejected on re-detected challenge — no mid-navigation race). Tag `captcha-v1`.
 
 ## v1 status: **COMPLETE** — M1–M6 built, tested, tagged (m1…m6).
 

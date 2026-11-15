@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/creativetoken/chromancer/internal/app"
 	"github.com/creativetoken/chromancer/internal/auth"
+	"github.com/creativetoken/chromancer/internal/captcha"
 	"github.com/creativetoken/chromancer/internal/identity"
 	"github.com/creativetoken/chromancer/internal/lab"
 	"github.com/creativetoken/chromancer/internal/model"
@@ -186,6 +188,44 @@ func (h *Harness) verifierFor(sc Scenario, e lab.Expect) app.Asker {
 	// The app builds TOTP from creds and a CLI/ask provider otherwise. For the
 	// eval harness we inject a lab-inbox-backed asker.
 	return &labAsker{base: h.LabBase, app: sc.App}
+}
+
+// CaptchaScenarios benchmarks the solver chain against the mock vendor apps.
+func CaptchaScenarios() []Scenario {
+	return []Scenario{
+		{App: "mock-recaptcha-v2", Mode: auth.Login, Hint: true},
+		{App: "mock-hcaptcha", Mode: auth.Login, Hint: true},
+		{App: "mock-turnstile-managed", Mode: auth.Login, Hint: true},
+		{App: "mock-recaptcha-invisible", Mode: auth.Login, Hint: true},
+		{App: "mock-recaptcha-v3", Mode: auth.Login, Hint: true},
+		{App: "mock-turnstile-invisible", Mode: auth.Login, Hint: true},
+		{App: "text-captcha", Mode: auth.Login, Hint: true},
+		{App: "image-grid", Mode: auth.Login, Hint: true},
+		{App: "captcha-on-failed-submit", Mode: auth.Login, Hint: true},
+	}
+}
+
+// CaptchaStats loads the per-(target,vendor,solver) stats the chain persisted
+// during a run (written to <workspace>/captcha-stats.json).
+func (h *Harness) CaptchaStats() ([]captcha.StatRow, error) {
+	s, err := captcha.LoadStats(filepath.Join(h.App.Cfg.Workspace, "captcha-stats.json"))
+	if err != nil {
+		return nil, err
+	}
+	return s.Rows(), nil
+}
+
+// CaptchaTable renders solver performance per (vendor × solver) as a markdown
+// table: solve rate, median latency and cost.
+func CaptchaTable(rows []captcha.StatRow) string {
+	var b strings.Builder
+	b.WriteString("| vendor | solver | attempts | accepted | solve_rate | median_ms | cost_usd |\n")
+	b.WriteString("|---|---|---:|---:|---:|---:|---:|\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "| %s | %s | %d | %d | %.0f%% | %d | %.4f |\n",
+			r.Vendor, r.Solver, r.Attempts, r.Accepted, r.SuccessRate*100, r.MedianMS, r.CostUSD)
+	}
+	return b.String()
 }
 
 // Table renders rows as an aligned text table.

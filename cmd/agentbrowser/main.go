@@ -189,6 +189,7 @@ func cmdCrawl(ctx context.Context, args []string) error {
 func cmdEval(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	runs := fs.Int("runs", 1, "runs per scenario")
+	captchaMode := fs.Bool("captcha", false, "benchmark the CAPTCHA solver chain vs the mock vendor apps")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -211,11 +212,22 @@ func cmdEval(ctx context.Context, args []string) error {
 	defer hs.Close()
 
 	h := &eval.Harness{App: a, Lab: srv, LabBase: base, ModelName: cfg.LLM.Provider, Runs: *runs}
-	rows, err := h.Run(ctx, eval.DefaultScenarios())
+	scenarios := eval.DefaultScenarios()
+	if *captchaMode {
+		scenarios = eval.CaptchaScenarios()
+	}
+	rows, err := h.Run(ctx, scenarios)
 	if err != nil {
 		return err
 	}
 	fmt.Print(eval.Table(rows))
+	if *captchaMode {
+		stats, err := h.CaptchaStats()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\nSolver performance (vendor × solver):\n\n%s", eval.CaptchaTable(stats))
+	}
 	return nil
 }
 

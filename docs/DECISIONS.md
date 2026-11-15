@@ -79,3 +79,29 @@
   invisible v2 and invisible Turnstile execute on submit and attach their own token — the flow
   submits and lets the page resolve them; never a human handoff for a score challenge · alt: treat
   any detected captcha as blocking (false dead-ends).
+- 2026-11-15 · **captchaHook advances through the chain on a decline; human handoff only on
+  exhaustion** · the pre-submit hook used to hand off on the first solver's decline, so
+  testmode→native→vision fallback never happened within one submit · it now loops eligible solvers
+  (decline → next) and `native` declines when its click leaves the response field empty; budget
+  errors propagate so exhaustion-by-budget surfaces as `failed{budget_exhausted}`.
+- 2026-11-15 · **Acceptance is decided by the challenge being gone; the reached-backend token check
+  is corroborating, not a veto** · a top-level form-POST body is not always captured by the recorder
+  (only XHR/fetch reliably is), and a token that never reached the backend leaves the challenge
+  standing anyway, so challenge-gone is the sound signal · outcome is settled on *authenticated*
+  (accepted) or *challenge re-detected* (rejected), not on a mid-navigation snapshot (which raced the
+  redirect and under-counted solver success).
+- 2026-11-15 · **testmode answers the vendors' published TEST sitekeys** (reCAPTCHA v2/hCaptcha/
+  Turnstile) with their documented always-pass tokens, from the vendors' public docs; real keys are
+  declined · lets the offline lab exercise the real detect→inject→submit path without defeating
+  anything real · alt: a bespoke lab-only token (doesn't exercise vendor response-field contracts).
+- 2026-11-15 · **External solver transport stays stdio-JSON (ADR 0011); the `plugins/captcha-generic`
+  adapter speaks the common create-task→poll→report HTTP service API** · matches real token-solving
+  services; configured by env; tested against a local httptest mock (never a real service).
+- 2026-11-15 · **Lab CAPTCHA mocks never load real vendor CDN scripts** · the e2e must be offline and
+  deterministic; the real Turnstile/reCAPTCHA scripts fetch the internet and render live widgets that
+  broke the flow · detection keys off the DOM widget + data attributes (reCAPTCHA v3 needs a
+  `render=` src, served from a local lab stub path).
+- 2026-11-15 · **Added `golang.org/x/net` (HTML fixtures) and `gopkg.in/yaml.v3` (chain config)** ·
+  pure-Go fixture parsing for fast detector unit tests, and the operator-facing YAML chain config;
+  both pinned to keep `x/crypto` at v0.59.0 · alt: browser-only detection tests (slow) and JSON-only
+  config (spec asks for YAML).

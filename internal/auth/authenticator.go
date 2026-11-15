@@ -226,9 +226,6 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 		if err != nil {
 			return fmt.Errorf("auth: perceive: %w", err)
 		}
-		// Report the outcome of any prior CAPTCHA solve (accepted iff the
-		// challenge is gone AND the token actually reached the backend).
-		a.reportCaptchaOutcome(ctx, p, st, rec)
 		// Verification is checked first: a page asking for a code/link is never
 		// "done", even if the URL changed (a weak success signal).
 		if vs := DetectVerifyStep(st); vs.Needed {
@@ -245,6 +242,7 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 		if ok, ev := (SuccessDetector{}).IsAuthenticated(ctx, p, st, a.base, rec.PostLoginXHRs()); ok {
 			a.trace.SuccessEvidence = ev
 			a.trace.Add("authenticated: %s", strings.Join(ev, ", "))
+			a.settleSolve(ctx, true, rec) // reaching authenticated means the CAPTCHA was accepted
 			return nil
 		}
 		// Signup said the account already exists → switch to login.
@@ -331,6 +329,8 @@ func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error
 		if !ok {
 			return nil
 		}
+		// A challenge is present again: any prior solve did not clear it.
+		a.settleSolve(ctx, false, nil)
 		a.trace.Captcha = append(a.trace.Captcha, string(ch.Vendor))
 		a.log("captcha", map[string]any{"vendor": string(ch.Vendor), "sitekey": ch.SiteKey, "kind": string(ch.Kind)})
 		// Score / invisible CAPTCHAs (reCAPTCHA v3, invisible v2, Enterprise)
@@ -388,18 +388,17 @@ func (a *Authenticator) detectors() []captcha.Detector {
 
 // reportCaptchaOutcome reports whether a prior solve was accepted, judged by
 // whether a challenge is still present.
-func (a *Authenticator) reportCaptchaOutcome(ctx context.Context, p *browser.Page, st perceive.State, rec *handback.Recorder) {
+// settleSolve reports the outcome of the pending CAPTCHA solve (if any) and
+// clears it. Acceptance is judged by reliable signals — authenticated ⇒
+// accepted; a challenge re-detected before the next submit ⇒ rejected — not by a
+// mid-navigation snapshot. Where request bodies are observable (XHR/fetch
+// logins) the reached-backend check is logged as corroborating evidence.
+func (a *Authenticator) settleSolve(ctx context.Context, accepted bool, rec *handback.Recorder) {
 	if a.pendingSolve == "" || a.Captcha == nil {
 		return
 	}
-	_, still := captcha.DetectAny(ctx, a.detectors(), p, st, captcha.NetSignals{})
-	// A token/text solve counts as applied only if it actually reached the
-	// backend (observed in an outgoing request). Score/invisible solves carry no
-	// payload we inject, so they are always "applied".
-	applied := a.pendingPayload == "" || (rec != nil && rec.TokenSubmitted(a.pendingPayload))
-	accepted := applied && !still
-	if a.pendingPayload != "" && !applied {
-		a.log("captcha", map[string]any{"applied": false, "note": "solved token not observed in submit"})
+	if accepted && a.pendingPayload != "" && rec != nil && !rec.TokenSubmitted(a.pendingPayload) {
+		a.log("captcha", map[string]any{"accepted": true, "token_observed_in_submit": false})
 	}
 	_ = a.Captcha.Outcome(ctx, a.pendingSolve, accepted)
 	a.pendingSolve = ""

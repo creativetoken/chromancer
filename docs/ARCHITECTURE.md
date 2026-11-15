@@ -362,6 +362,15 @@ authenticated browser. `view_url` is **bound to localhost by default**; when exp
 host it requires a **one-time token** embedded in the URL that expires when the challenge is
 resolved or the job ends.
 
+**Implemented chain (see `docs/CAPTCHA.md`).** Detection judges challenges by *computed
+visibility* (not script presence), extracts vendor params, and fires from DOM, script signals and
+failed-submit bodies. The default solver chain is **`testmode → native → vision → external →
+human`** (configurable via `AGENTBROWSER_CAPTCHA_CONFIG`; human is always last): vendor test keys,
+real-browser completion, a vision model for image/text, an out-of-process generic service adapter
+(`plugins/captcha-generic/`), then handoff. Score/invisible challenges (reCAPTCHA v3, invisible v2,
+managed/invisible Turnstile) are **non-blocking**. Per-`(target,vendor,solver)` stats drive optional
+adaptive ordering; `agentbrowser eval --captcha` benchmarks the chain against mock vendor apps.
+
 ---
 
 ## 7. Session handback (the v1 product)

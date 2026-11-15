@@ -2,7 +2,20 @@
 
 > Single source of truth for resuming. On restart: read this file and `DECISIONS.md` first.
 
-## Status: **complete** — CAPTCHA solving module (C1–C5) built, tested, tagged `captcha-v1`. Automated solving is the norm; human handoff is the last resort.
+## Active work: **Verification module (V1–V5)** — the agent fetches 2FA codes/links itself (Twilio SMS, Gmail IMAP, TOTP incl. enrolment capture). CLI/MCP stay as fallbacks.
+- [ ] **V1 — identity resources + config + shared extraction/claiming.** YAML resources (phones,
+  mailboxes, providers, accounts, totp), startup validation (fail fast, never print secrets);
+  deterministic code + link extractors; claimed-message store.
+- [ ] **V2 — Twilio SMS provider** (REST poll + optional signed webhook, matching, extraction,
+  claim, resend, phone_rejected) vs an httptest mock Twilio API.
+- [ ] **V3 — Gmail IMAP provider** (shared conn per mailbox, IDLE/poll, narrow search, alias
+  separation, MIME, code/link, claim-once) vs an in-memory IMAP server.
+- [ ] **V3b — TOTP provider** (otpauth parsing, SHA1/256/512, 6/8 digits, 30/60s, boundary guard,
+  skew retry, per-digit boxes, enrolment capture via QR decode, get_totp tool).
+- [ ] **V4 — routing + fallback chain + agent/MCP tools (read_sms/read_email) + CLI verify test.**
+- [ ] **V5 — live smoke tests (build tag), docs, tag `verification-v1`.**
+
+## CAPTCHA module: **complete** — C1–C5 built, tested, tagged `captcha-v1`. Automated solving is the norm; human handoff is the last resort.
 - [x] **C1 — detection & parameter extraction.** Unified detector + pure classifier shared by a
   browser JS probe (computed visibility) and a pure-Go `x/net/html` probe. Classes: reCAPTCHA v2
   checkbox / invisible / v3 / Enterprise, hCaptcha, Turnstile (managed/invisible), Cloudflare

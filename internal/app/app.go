@@ -6,6 +6,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/creativetoken/chromancer/internal/audit"
@@ -118,6 +121,33 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 		return AuthResult{Err: err, Reason: auth.FailReason(err)}
 	}
 	return AuthResult{Result: res}
+}
+
+// ReadArtefactURI resolves an agentbrowser://artefacts/<account>/<file> URI to
+// its bytes, scoped to that account's artefacts directory.
+func (a *App) ReadArtefactURI(uri string) ([]byte, string, error) {
+	const prefix = "agentbrowser://artefacts/"
+	if !strings.HasPrefix(uri, prefix) {
+		return nil, "", fmt.Errorf("unsupported uri scheme: %s", uri)
+	}
+	rest := strings.TrimPrefix(uri, prefix)
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return nil, "", fmt.Errorf("malformed artefact uri: %s", uri)
+	}
+	account, file := parts[0], parts[1]
+	if strings.ContainsAny(file, "/\\") || strings.Contains(file, "..") {
+		return nil, "", fmt.Errorf("invalid artefact name")
+	}
+	ws, err := a.Cfg.ForAccount(account)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(filepath.Join(ws.Artefacts, file))
+	if err != nil {
+		return nil, "", fmt.Errorf("read artefact: %w", err)
+	}
+	return data, "application/json", nil
 }
 
 // ExportSession returns the latest bundle reference for an account.

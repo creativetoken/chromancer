@@ -15,6 +15,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/config"
 	"github.com/creativetoken/chromancer/internal/identity"
+	"github.com/creativetoken/chromancer/internal/server"
 )
 
 func main() {
@@ -33,6 +34,8 @@ func main() {
 		err = cmdAuth(ctx, os.Args[2:])
 	case "export-session":
 		err = cmdExport(ctx, os.Args[2:])
+	case "mcp":
+		err = cmdMCP(ctx, os.Args[2:])
 	case "newkey":
 		k, e := identity.NewRandomKey()
 		if e != nil {
@@ -60,6 +63,7 @@ Usage:
   agentbrowser creds put --target URL --account NAME --username U --password P [--totp-seed S]
   agentbrowser auth --account NAME --mode login|signup [--login-url URL] [--signup-url URL] [--headful]
   agentbrowser export-session --account NAME
+  agentbrowser mcp                        # run the MCP server over stdio
   agentbrowser newkey
 
 Environment:
@@ -140,6 +144,26 @@ func cmdAuth(ctx context.Context, args []string) error {
 	}, "", "  ")
 	fmt.Println(string(out))
 	return nil
+}
+
+func cmdMCP(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	headful := fs.Bool("headful", false, "run browsers with a visible window")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg := config.Default()
+	if *headful {
+		cfg.Headless = false
+	}
+	a, err := app.New(cfg)
+	if err != nil {
+		return err
+	}
+	jm := server.NewJobManager(a)
+	srv := server.NewMCP(jm, a)
+	fmt.Fprintln(os.Stderr, "agentbrowser MCP server on stdio")
+	return srv.Serve(ctx, os.Stdin, os.Stdout)
 }
 
 func cmdExport(ctx context.Context, args []string) error {

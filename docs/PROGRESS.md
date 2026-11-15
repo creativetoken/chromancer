@@ -4,7 +4,7 @@
 > continue from **Next** without redoing finished work.
 
 ## Current milestone
-**M1 — Login + session handback (CLI)** (verifying full e2e)
+**M2 — Job-based MCP server** (complete)
 
 ## Done
 - **Step 0 / 0.5 complete.** Scaffold, Makefile, CI, README, docs. Module

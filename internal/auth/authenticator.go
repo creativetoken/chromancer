@@ -331,7 +331,19 @@ func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error
 			return nil
 		}
 		a.trace.Captcha = append(a.trace.Captcha, string(ch.Vendor))
-		a.log("captcha", map[string]any{"vendor": string(ch.Vendor), "sitekey": ch.SiteKey})
+		a.log("captcha", map[string]any{"vendor": string(ch.Vendor), "sitekey": ch.SiteKey, "kind": string(ch.Kind)})
+		// Score / invisible CAPTCHAs (reCAPTCHA v3, invisible v2, Enterprise)
+		// are not interactive: the page's own JS runs them on submit and attaches
+		// the token. If a solver can supply a token we inject it; otherwise we
+		// simply proceed to submit. A score challenge is never a human handoff.
+		if ch.Kind == captcha.KindScore {
+			if !a.Captcha.Exhausted(ch) {
+				if res, err := a.Captcha.Resolve(ctx, p, ch); err == nil {
+					a.pendingSolve = res.SolveID
+				}
+			}
+			return nil
+		}
 		if a.Captcha.Exhausted(ch) {
 			return a.doHandoff(ctx, captcha.ReasonCaptchaExhausted)
 		}

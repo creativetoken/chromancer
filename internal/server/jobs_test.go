@@ -9,6 +9,7 @@ import (
 
 	"github.com/creativetoken/chromancer/internal/app"
 	"github.com/creativetoken/chromancer/internal/auth"
+	"github.com/creativetoken/chromancer/internal/explore"
 	"github.com/creativetoken/chromancer/internal/handback"
 )
 
@@ -39,6 +40,20 @@ func (f *fakeRunner) RunAuth(ctx context.Context, account string, mode auth.Mode
 		}
 	}
 	return app.AuthResult{Result: f.result, Err: f.err, Reason: f.reason}
+}
+
+func (f *fakeRunner) RunCrawl(ctx context.Context, account string, _ app.Asker) app.CrawlResult {
+	f.mu.Lock()
+	gate := f.gate
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return app.CrawlResult{Err: ctx.Err(), Reason: "cancelled"}
+		}
+	}
+	return app.CrawlResult{Report: &explore.Report{StatesVisited: 3, StopReason: "plateau"}}
 }
 
 func (f *fakeRunner) ExportSession(ctx context.Context, account string) (handback.ArtefactRef, handback.SessionBundle, error) {

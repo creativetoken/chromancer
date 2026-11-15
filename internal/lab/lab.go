@@ -350,5 +350,6 @@ func allApps() []App {
 		&captchaMockApp{},
 		&captchaBlockApp{},
 		&stuckLoginApp{},
+		&crawlApp{},
 	}
 }

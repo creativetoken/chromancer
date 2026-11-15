@@ -46,14 +46,16 @@ type Answer struct {
 	Done     bool   `json:"done,omitempty"`
 }
 
-// Job is a running or finished auth job (JSON-serialisable for get_job).
+// Job is a running or finished auth/crawl job (JSON-serialisable for get_job).
 type Job struct {
 	ID         string           `json:"id"`
 	Account    string           `json:"account"`
 	Mode       string           `json:"mode"`
+	Kind       string           `json:"kind"` // auth | crawl
 	State      JobState         `json:"state"`
 	Pending    *Pending         `json:"pending,omitempty"`
 	Result     *handback.Result `json:"result,omitempty"`
+	Crawl      *app.CrawlResult `json:"crawl,omitempty"`
 	Reason     string           `json:"reason,omitempty"`
 	Error      string           `json:"error,omitempty"`
 	StartedAt  time.Time        `json:"started_at"`
@@ -69,6 +71,7 @@ type Job struct {
 // the MCP pending/answer surface for this job.
 type Runner interface {
 	RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, asker app.Asker) app.AuthResult
+	RunCrawl(ctx context.Context, account string, asker app.Asker) app.CrawlResult
 	ExportSession(ctx context.Context, account string) (handback.ArtefactRef, handback.SessionBundle, error)
 }
 
@@ -114,12 +117,60 @@ func (m *JobManager) StartAuth(parent context.Context, account string, mode auth
 		StartedAt: time.Now().UTC(), cancel: cancel, doneCh: make(chan struct{}),
 		prompt: newPrompter(),
 	}
+	j.Kind = "auth"
 	m.jobs[id] = j
 	m.active[account] = id
 	m.mu.Unlock()
 
 	go m.run(ctx, j, mode, hints)
 	return id, nil
+}
+
+// StartCrawl launches an authenticated-crawl job (Phase 2) for an account.
+func (m *JobManager) StartCrawl(parent context.Context, account string) (string, error) {
+	m.mu.Lock()
+	if id, ok := m.active[account]; ok {
+		busy := ErrAccountBusy{Account: account, JobID: id}
+		m.mu.Unlock()
+		return "", busy
+	}
+	m.seq++
+	id := fmt.Sprintf("crawl-%d-%d", time.Now().Unix(), m.seq)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	j := &Job{ID: id, Account: account, Kind: "crawl", State: StateRunning, StartedAt: time.Now().UTC(),
+		cancel: cancel, doneCh: make(chan struct{}), prompt: newPrompter()}
+	m.jobs[id] = j
+	m.active[account] = id
+	m.mu.Unlock()
+
+	go m.runCrawl(ctx, j)
+	return id, nil
+}
+
+func (m *JobManager) runCrawl(ctx context.Context, j *Job) {
+	defer close(j.doneCh)
+	res := m.runner.RunCrawl(ctx, j.Account, &jobAsker{m: m, j: j})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	j.FinishedAt = &now
+	j.Pending = nil
+	switch {
+	case res.Err == nil:
+		j.State = StateDone
+		j.Crawl = &res
+	case ctx.Err() != nil:
+		j.State = StateCancelled
+		j.Reason = "cancelled"
+	default:
+		j.State = StateFailed
+		j.Reason = res.Reason
+		if j.Reason == "" {
+			j.Reason = "flow_failed"
+		}
+		j.Error = res.Err.Error()
+	}
+	delete(m.active, j.Account)
 }
 
 func (m *JobManager) run(ctx context.Context, j *Job, mode auth.Mode, hints auth.Hints) {

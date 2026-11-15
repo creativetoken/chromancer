@@ -174,6 +174,19 @@ func (s *MCP) callTool(ctx context.Context, name string, args json.RawMessage) (
 			return nil, err
 		}
 		return map[string]any{"job_id": id}, nil
+	case "start_crawl":
+		var a struct {
+			Account string `json:"account"`
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.Account == "" {
+			return nil, fmt.Errorf("account is required")
+		}
+		id, err := s.jobs.StartCrawl(ctx, a.Account)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"job_id": id}, nil
 	case "get_job":
 		var a struct {
 			JobID string `json:"job_id"`
@@ -269,8 +282,13 @@ func toolDefs() []any {
 			}, "account"),
 		},
 		map[string]any{
+			"name":        "start_crawl",
+			"description": "Phase 2: start an authenticated crawl of the app for an account (uses the saved session; re-logs-in if it drops; never takes account-ending actions). Returns a job_id.",
+			"inputSchema": strObj(map[string]any{"account": str}, "account"),
+		},
+		map[string]any{
 			"name":        "get_job",
-			"description": "Get a job's status: running | needs_verification | needs_human | done | failed | cancelled, with its pending challenge or result.",
+			"description": "Get a job's status: running | needs_verification | needs_human | done | failed | cancelled, with its pending challenge or result (auth done carries bundle_ref/recording_ref; crawl done carries a report).",
 			"inputSchema": strObj(map[string]any{"job_id": str}, "job_id"),
 		},
 		map[string]any{

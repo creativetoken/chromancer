@@ -34,6 +34,8 @@ func main() {
 		err = cmdAuth(ctx, os.Args[2:])
 	case "export-session":
 		err = cmdExport(ctx, os.Args[2:])
+	case "crawl":
+		err = cmdCrawl(ctx, os.Args[2:])
 	case "mcp":
 		err = cmdMCP(ctx, os.Args[2:])
 	case "newkey":
@@ -63,6 +65,7 @@ Usage:
   agentbrowser creds put --target URL --account NAME --username U --password P [--totp-seed S]
   agentbrowser auth --account NAME --mode login|signup [--login-url URL] [--signup-url URL] [--headful]
   agentbrowser export-session --account NAME
+  agentbrowser crawl --account NAME [--headful]   # Phase 2: authenticated crawl
   agentbrowser mcp                        # run the MCP server over stdio
   agentbrowser newkey
 
@@ -142,6 +145,35 @@ func cmdAuth(ctx context.Context, args []string) error {
 		"recording_ref": res.Result.RecordingRef,
 		"trace":         res.Result.Trace,
 	}, "", "  ")
+	fmt.Println(string(out))
+	return nil
+}
+
+func cmdCrawl(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("crawl", flag.ContinueOnError)
+	account := fs.String("account", "", "account name")
+	headful := fs.Bool("headful", false, "run with a visible browser")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *account == "" {
+		return fmt.Errorf("--account is required")
+	}
+	cfg := config.Default()
+	if *headful {
+		cfg.Headless = false
+	}
+	a, err := app.New(cfg)
+	if err != nil {
+		return err
+	}
+	res := a.RunCrawl(ctx, *account, nil)
+	if res.Err != nil {
+		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")
+		fmt.Println(string(out))
+		return res.Err
+	}
+	out, _ := json.MarshalIndent(map[string]any{"status": "done", "report": res.Report}, "", "  ")
 	fmt.Println(string(out))
 	return nil
 }

@@ -4,7 +4,20 @@
 > continue from **Next** without redoing finished work.
 
 ## Current milestone
-**M4 — CAPTCHA + human handoff** (verifying full e2e). M1–M3 complete + tagged.
+**M5 — Phase 2 authenticated crawl** (verifying full e2e). M1–M4 complete + tagged.
+
+## M5 done
+- `explore` package: BFS **Explorer** from a saved session — navigate, dedup by simhash
+  (parameterised routes collapse), submit a representative form with sensible typed data,
+  plateau/budget stop. **Account-safety deny-list** at the action boundary (logout, delete
+  account, change creds, revoke, API keys) — controls are skipped and recorded, never clicked.
+  **Mid-crawl re-login** on session loss (same browser), restarting the in-flight sub-goal.
+- `app.RunCrawl` (restore session → Explorer with same-browser Authenticator relogin); CLI
+  `agentbrowser crawl`; MCP `start_crawl` job (report in `get_job` done).
+- Lab `crawl` app (nav menu, paginated list, item detail, settings form, logout link,
+  delete-account button, session expiring after N requests) + ground-truth states.
+- e2e: full login→crawl reaches all ground-truth states, submits the form, refuses logout/
+  delete, survives forced expiry via re-login, stops on plateau/frontier; MCP start_crawl too.
 
 ## M4 done
 - `captcha` package: `Detector`/`Injector`/`Resolver`/`Solver` contracts; per-vendor

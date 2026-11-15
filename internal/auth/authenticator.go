@@ -346,19 +346,36 @@ func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error
 			}
 			return nil
 		}
-		if a.Captcha.Exhausted(ch) {
-			return a.doHandoff(ctx, captcha.ReasonCaptchaExhausted)
+		// Image/text challenges need the pixels: capture the viewport so the
+		// vision solver has something to read.
+		if ch.Kind == captcha.KindImage && len(ch.Image) == 0 {
+			if img, err := p.Screenshot(ctx); err == nil {
+				ch.Image = img
+			}
 		}
-		res, err := a.Captcha.Resolve(ctx, p, ch)
-		if err != nil {
-			if errors.Is(err, captcha.ErrExhausted) || errors.Is(err, captcha.ErrNoSolver) || errors.Is(err, captcha.ErrDeclined) {
+		// Try eligible solvers in order; a decline advances to the next one.
+		// A human handoff happens only when the whole chain is exhausted.
+		for {
+			if a.Captcha.Exhausted(ch) {
 				return a.doHandoff(ctx, captcha.ReasonCaptchaExhausted)
+			}
+			res, err := a.Captcha.Resolve(ctx, p, ch)
+			if err == nil {
+				a.pendingSolve = res.SolveID
+				a.pendingPayload = res.Payload()
+				return nil
+			}
+			if errors.Is(err, captcha.ErrDeclined) || errors.Is(err, captcha.ErrUnsupported) {
+				continue // next eligible solver
+			}
+			if errors.Is(err, captcha.ErrExhausted) || errors.Is(err, captcha.ErrNoSolver) {
+				return a.doHandoff(ctx, captcha.ReasonCaptchaExhausted)
+			}
+			if errors.Is(err, core.ErrBudgetExhausted) {
+				return err // surface as failed{budget_exhausted}
 			}
 			return fmt.Errorf("%w: captcha: %v", ErrFlowFailed, err)
 		}
-		a.pendingSolve = res.SolveID
-		a.pendingPayload = res.Payload()
-		return nil
 	}
 }
 

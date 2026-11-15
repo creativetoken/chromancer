@@ -157,6 +157,11 @@ func New() *Server {
 	sort.Strings(s.order)
 	s.mux.HandleFunc("/__lab/inbox", s.handleInbox)
 	s.mux.HandleFunc("/__lab/reset", s.handleReset)
+	// Local stub for a reCAPTCHA v3 render= script (keeps the lab offline).
+	s.mux.HandleFunc("/__lab/stub/recaptcha/api.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = w.Write([]byte("/* lab recaptcha stub */"))
+	})
 	s.mux.HandleFunc("/__lab/apps", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.order)
 	})
@@ -333,7 +338,7 @@ func requireCookie(sess *Sessions, cookie, loginURL string, next func(w http.Res
 }
 
 func allApps() []App {
-	return []App{
+	apps := []App{
 		&simpleApp{},
 		&multistepApp{},
 		&modalApp{},
@@ -352,4 +357,5 @@ func allApps() []App {
 		&stuckLoginApp{},
 		&crawlApp{},
 	}
+	return append(apps, captchaLabApps()...)
 }

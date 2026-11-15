@@ -200,29 +200,36 @@ func (r *chainResolver) Resolve(ctx context.Context, p *browser.Page, c Challeng
 		}
 	}
 	// After a native-style click (UIActions on a widget with a response field),
-	// give the browser time to run its own verification and fill the token.
+	// give the browser time to run its own verification and fill the token. If
+	// nothing fills the field, native could not complete it: decline so the
+	// chain advances to the next solver instead of submitting an empty token.
 	if res.Kind == ResultUIActions && c.fieldSel != "" && p != nil {
-		waitFieldFilled(ctx, p, c.fieldSel, r.nativeWait)
+		if !waitFieldFilled(ctx, p, c.fieldSel, r.nativeWait) {
+			return Result{}, ErrDeclined
+		}
 	}
 	r.logf("captcha_solve", map[string]any{"solver": entry.s.Name(), "vendor": string(c.Vendor), "kind": int(res.Kind), "solve_id": res.SolveID})
 	return res, nil
 }
 
 // waitFieldFilled polls a response-field selector until it holds a non-empty
-// value or the timeout elapses (for native browser-completed challenges).
-func waitFieldFilled(ctx context.Context, p *browser.Page, sel string, timeout time.Duration) {
+// value or the timeout elapses; it reports whether the field filled.
+func waitFieldFilled(ctx context.Context, p *browser.Page, sel string, timeout time.Duration) bool {
 	const js = `(sel) => { for (const s of sel.split(',')) { const el = document.querySelector(s.trim()); if (el && el.value) return true; } return false; }`
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		if v, err := p.Eval(ctx, js, sel); err == nil && v.Bool() {
-			return
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-time.After(250 * time.Millisecond):
 		}
 	}

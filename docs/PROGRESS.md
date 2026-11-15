@@ -26,7 +26,16 @@
   - external generic adapter `plugins/captcha-generic/` speaks create-task→poll→report over HTTP, forwards sitekey/URL/action/enterprise/UA/proxy, records cost, reports on Outcome; tested against a local mock service (no real service).
   - per-(target,vendor,solver) `Stats` (attempts/accepted/median/cost, file-backed) with optional `adaptive_order`.
   - YAML chain config (`configs/captcha.example.yaml`, `AGENTBROWSER_CAPTCHA_CONFIG`): chain, max_solves, max_cost, timeout_per_solver, adaptive_order, external[]. Conformance passes for testmode/native/vision/generic.
-- [ ] **C4 — lab vendor mocks** (mock-recaptcha-v2/invisible/v3, mock-hcaptcha, mock-turnstile managed/invisible, image-grid, text-captcha, captcha-hard, captcha-on-failed-submit) + mock external solver service.
+- [x] **C4 — lab vendor mocks + offline e2e.** `internal/lab/apps_captcha.go`: mock-recaptcha-v2
+  (testmode), mock-recaptcha-invisible / mock-recaptcha-v3 / mock-turnstile-invisible (score,
+  non-blocking), mock-hcaptcha (testmode), mock-turnstile-managed (native), text-captcha + image-grid
+  (vision, ground truth at `/__lab/truth`), captcha-hard (→ handoff → resolve → success),
+  captcha-on-failed-submit (widget appears after first reject). Lab is fully offline (no real vendor
+  CDN scripts). Mock external solver service is a local httptest server in the generic adapter's test.
+  e2e (`e2e/captcha_vendors_e2e_test.go`): every app solved by its chain; captcha-hard handoff;
+  budget exhaustion → `failed{budget_exhausted}`. Found+fixed two design gaps: captchaHook now
+  advances through the chain on a decline (handoff only on exhaustion), and native declines cleanly
+  when its click produces no token.
 - [ ] **C5 — eval (solve rate / time / cost per vendor×solver), `docs/CAPTCHA.md`, ARCHITECTURE §6.6 refresh, tag `captcha-v1`.**
 
 ## v1 status: **COMPLETE** — M1–M6 built, tested, tagged (m1…m6).

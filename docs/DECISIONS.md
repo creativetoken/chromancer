@@ -155,3 +155,13 @@
 - 2026-11-16 · **System prompt in a versioned template `prompts/crawl_system.md`** · overridable
   with `--system-prompt-file`; the operator prompt is inserted into a clearly delimited
   "Operator instructions" section and cannot disable the deny-list.
+
+### Iterative LLM entrypoint discovery
+- 2026-11-16 · **The LLM entry fallback navigates across steps instead of a single
+  pick** · on content sites (e.g. BuzzFeed) the login/signup control is hidden behind an account
+  or hamburger menu, or on an auth subdomain, so the one-shot "pick a node on the root" fallback
+  found nothing · `tryLLMIterative` loops perceive→ask→click→re-check up to 6 steps (opening a menu,
+  then clicking the revealed Sign in/up control), stopping on success, a give-up (handle 0), no
+  progress (same signature twice), or the step cap. Lab app `menu-signup` hides its signup at a
+  non-guessable path behind an account menu so only this path can reach it. `App.AuthModel` is a
+  test seam to script the classify model for entry discovery.

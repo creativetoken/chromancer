@@ -44,6 +44,9 @@ type App struct {
 	// CrawlModel, when set, overrides the router's model for the LLM/hybrid crawl
 	// driver. Used by tests to script a deterministic action sequence.
 	CrawlModel explore.LLMModel
+	// AuthModel, when set, overrides the router for the auth flow (entrypoint LLM
+	// fallback, classification). Used by tests to script entry discovery.
+	AuthModel model.LLMProvider
 }
 
 // New builds an App from config, reading the store key from the environment.
@@ -130,9 +133,13 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	defer b.Close()
 
 	resolver, handoff := a.captchaKit(asker, al, bud, target)
+	authRouter := a.Router
+	if a.AuthModel != nil {
+		authRouter = &model.StaticRouter{Default: a.AuthModel}
+	}
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,
-		Perceiver: perceive.New(), Router: a.Router,
+		Perceiver: perceive.New(), Router: authRouter,
 		Sessions:   &auth.FileSessionStore{Path: ws.SessionEnc, Key: a.Key},
 		Writer:     &handback.FileWriter{Dir: ws.Artefacts, Account: account},
 		Audit:      al,

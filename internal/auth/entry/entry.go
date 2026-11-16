@@ -199,11 +199,13 @@ func (r *Resolver) Resolve(ctx context.Context, target, root string, mode Mode, 
 			return e, nil
 		}
 	}
-	// 4. LLM fallback: re-load root, ask which control starts login/signup.
+	// 4. LLM fallback: re-load root and let the model navigate to the entry — it
+	// may need to open an account/hamburger menu first, so this iterates (click →
+	// re-perceive → check) rather than taking a single pick.
 	if d.Router != nil {
 		if err := d.Page.Navigate(ctx, root); err == nil {
 			if st2, _, perr := d.Perceiver.Perceive(ctx, d.Page); perr == nil {
-				if e, ok := r.tryLLM(ctx, st2, mode, d); ok {
+				if e, ok := r.tryLLMIterative(ctx, st2, mode, d, trace); ok {
 					r.writeCache(target, mode, e)
 					trace("entrypoint via llm: %s", e.URL)
 					return e, nil
@@ -302,53 +304,96 @@ type llmPick struct {
 	Reason string `json:"reason"`
 }
 
-// tryLLM asks the classify model which node starts the login/signup flow.
-func (r *Resolver) tryLLM(ctx context.Context, st perceive.State, mode Mode, d Deps) (Entrypoint, bool) {
+// maxEntrySteps bounds the iterative LLM entry search.
+const maxEntrySteps = 6
+
+// tryLLMIterative lets the classify model navigate to the auth entry across
+// several steps: at each step it is shown the current page's interactive
+// elements and picks the one element that makes progress toward the login/signup
+// page (e.g. an account/hamburger menu, then the "Sign in"/"Sign up" control it
+// reveals). After each click it re-perceives and checks whether a form appeared.
+// It stops on success, when the model gives up (handle 0), when it stops making
+// progress (same page twice), or after maxEntrySteps.
+func (r *Resolver) tryLLMIterative(ctx context.Context, st perceive.State, mode Mode, d Deps, trace func(string, ...any)) (Entrypoint, bool) {
 	prov := d.Router.For(model.TaskClassify)
 	if prov == nil {
 		return Entrypoint{}, false
 	}
-	prompt := fmt.Sprintf(`You are helping an automation agent find where a web app's %s flow begins.
-Below are the interactive elements on the page, each with a handle (#N).
-Pick the single element a user would click to START %s. Reply with JSON: {"handle": N, "reason": "..."}.
-If none fits, reply {"handle": 0, "reason": "none"}.
-
-%s`, mode, mode, perceive.Compact(st))
-	raw, _, err := prov.Structured(ctx, []model.Message{{Role: model.User, Text: prompt}}, json.RawMessage(`{"type":"object","properties":{"handle":{"type":"integer"},"reason":{"type":"string"}},"required":["handle","reason"]}`), model.ChatOpts{})
-	if err != nil {
-		return Entrypoint{}, false
-	}
-	var pick llmPick
-	if json.Unmarshal(raw, &pick) != nil || pick.Handle == 0 {
-		return Entrypoint{}, false
-	}
-	n, ok := st.Find(pick.Handle)
-	if !ok {
-		return Entrypoint{}, false
-	}
-	rootURL := d.Page.URL()
-	fr, err := perceive.FrameOf(ctx, d.Page, n)
-	if err != nil {
-		return Entrypoint{}, false
-	}
-	el, err := d.Page.Element(ctx, fr, perceive.Selector(n.Handle), d.Timeout)
-	if err != nil {
-		return Entrypoint{}, false
-	}
-	if err := d.Page.Click(ctx, el); err != nil {
-		return Entrypoint{}, false
-	}
-	_ = d.Page.WaitStable(ctx, browser.DefaultStableTimeout)
-	st2, _, err := d.Perceiver.Perceive(ctx, d.Page)
-	if err != nil {
-		return Entrypoint{}, false
-	}
-	if ok, variant := d.Check(st2, mode); ok {
-		how := "llm"
-		if d.Page.URL() == rootURL {
-			how = "modal"
+	var trail []string
+	lastSig := ""
+	for step := 0; step < maxEntrySteps; step++ {
+		// Already on the form?
+		if ok, variant := d.Check(st, perceive2Mode(mode)); ok {
+			return Entrypoint{URL: d.Page.URL(), How: "llm", Variant: variant, Reached: time.Now().UTC()}, true
 		}
-		return Entrypoint{URL: d.Page.URL(), How: how, Variant: variant, Reached: time.Now().UTC()}, true
+		sig := perceive.Signature(st)
+		if sig == lastSig {
+			break // the last click changed nothing; stop rather than loop
+		}
+		lastSig = sig
+
+		pick, ok := r.askEntryStep(ctx, prov, st, mode, trail)
+		if !ok || pick.Handle == 0 {
+			break
+		}
+		n, found := st.Find(pick.Handle)
+		if !found {
+			break
+		}
+		trail = append(trail, fmt.Sprintf("clicked %q (%s)", nodeText(n), strings.TrimSpace(pick.Reason)))
+		fr, err := perceive.FrameOf(ctx, d.Page, n)
+		if err != nil {
+			break
+		}
+		el, err := d.Page.Element(ctx, fr, perceive.Selector(n.Handle), d.Timeout)
+		if err != nil {
+			break
+		}
+		if err := d.Page.Click(ctx, el); err != nil {
+			break
+		}
+		_ = d.Page.WaitStable(ctx, browser.DefaultStableTimeout)
+		st2, _, perr := d.Perceiver.Perceive(ctx, d.Page)
+		if perr != nil {
+			break
+		}
+		trace("entry llm step %d: clicked #%d (%s) → %s", step+1, pick.Handle, nodeText(n), d.Page.URL())
+		st = st2
 	}
 	return Entrypoint{}, false
+}
+
+// askEntryStep asks the model for the one element to click next.
+func (r *Resolver) askEntryStep(ctx context.Context, prov model.LLMProvider, st perceive.State, mode Mode, trail []string) (llmPick, bool) {
+	history := "none yet"
+	if len(trail) > 0 {
+		history = strings.Join(trail, "; ")
+	}
+	prompt := fmt.Sprintf(`You are guiding an automation agent to the page where a web app's %s flow begins.
+You see the current page's interactive elements, each with a handle (#N). The %s control may be hidden behind an account menu, a hamburger menu, or a "Sign in"/"Sign up" link — if so, click that first to reveal it.
+
+Pick the SINGLE element to click next to make progress toward the %s page. Reply JSON: {"handle": N, "reason": "..."}. If the current page already looks like the %s form, or nothing here helps, reply {"handle": 0, "reason": "..."}.
+
+Current URL: %s
+Already clicked: %s
+
+Elements:
+%s`, mode, mode, mode, mode, st.URL, history, perceive.Compact(st))
+	raw, _, err := prov.Structured(ctx, []model.Message{{Role: model.User, Text: prompt}},
+		json.RawMessage(`{"type":"object","properties":{"handle":{"type":"integer"},"reason":{"type":"string"}},"required":["handle","reason"]}`), model.ChatOpts{})
+	if err != nil {
+		return llmPick{}, false
+	}
+	var pick llmPick
+	if json.Unmarshal(raw, &pick) != nil {
+		return llmPick{}, false
+	}
+	return pick, true
+}
+
+func nodeText(n perceive.Node) string {
+	if n.Name != "" {
+		return n.Name
+	}
+	return n.Text
 }

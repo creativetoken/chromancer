@@ -356,6 +356,7 @@ func allApps() []App {
 		&captchaBlockApp{},
 		&stuckLoginApp{},
 		&crawlApp{},
+		&menuSignupApp{},
 	}
 	return append(apps, captchaLabApps()...)
 }

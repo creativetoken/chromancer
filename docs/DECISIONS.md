@@ -182,3 +182,12 @@
   images) and false for mock, overridable via `AGENTBROWSER_LLM_VISION`. Note: enabling vision lets
   the solver *engage*; a v2 image grid (cross-origin iframe, multi-round) is still a hard target —
   the external-plugin slot or not triggering it remain the reliable paths.
+- 2026-11-16 · **Headless Chrome no longer announces itself in the UA / client hints** · Chromium
+  reports `HeadlessChrome` in both `navigator.userAgent` and the `Sec-CH-UA` brand list — an instant
+  bot tell that pushes reCAPTCHA/Cloudflare to the hardest challenges · at launch the browser now
+  reads the real UA + high-entropy `navigator.userAgentData` and re-applies them on every page via
+  `Network.setUserAgentOverride` with the `HeadlessChrome` marker rewritten to `Chrome` /
+  `Google Chrome`, so the UA string, Sec-CH-UA headers and `navigator.userAgentData` all stay
+  consistent with the real build/platform and never leak headless. `AGENTBROWSER_UA` pins an explicit
+  UA string. `navigator.webdriver` was already hidden via `disable-blink-features=AutomationControlled`.
+  Deriving from the live browser avoids version drift (no hardcoded Chrome version to go stale).

@@ -77,6 +77,7 @@ func Default() Config {
 		Workspace: ws,
 		Headless:  strings.ToLower(os.Getenv("AGENTBROWSER_HEADFUL")) != "1",
 		ProxyURL:  os.Getenv("AGENTBROWSER_PROXY"),
+		UserAgent: os.Getenv("AGENTBROWSER_UA"), // optional; empty = real Chrome UA, headless marker stripped
 		Timeout:   5 * time.Minute,
 		Capture:   CaptureWindow{N: 20, T: 10 * time.Second},
 		LLM:       LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov)},

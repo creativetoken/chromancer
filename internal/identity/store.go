@@ -45,6 +45,10 @@ type Account struct {
 // ErrNotFound is returned when an account has no stored credentials.
 var ErrNotFound = errors.New("credentials not found")
 
+// ErrWrongKey means a stored file could not be decrypted with the current
+// AGENTBROWSER_KEY (the key changed or the file was written under another key).
+var ErrWrongKey = errors.New("identity: decryption failed (wrong key?)")
+
 // CredentialStore holds operator credentials + optional profile per account,
 // encrypted at rest (key from an env var).
 type CredentialStore interface {
@@ -170,10 +174,15 @@ func (s *FileStore) PutCredentials(_ context.Context, target string, account Acc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	acc, err := s.load(account)
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	// A put is authoritative: it supplies the target and credentials in full. A
+	// missing file, or an existing one encrypted under a different key (its
+	// contents are unrecoverable anyway), is overwritten fresh under the current
+	// key rather than refused — otherwise a key change would wedge the account
+	// with no way back in from the CLI.
+	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrWrongKey) {
 		return err
 	}
-	if acc == nil {
+	if acc == nil || errors.Is(err, ErrWrongKey) {
 		acc = &Account{ID: account}
 	}
 	acc.Target = target
@@ -274,7 +283,7 @@ func Decrypt(key *[32]byte, data []byte) ([]byte, error) {
 	copy(nonce[:], data[:24])
 	plain, ok := secretbox.Open(nil, data[24:], &nonce, key)
 	if !ok {
-		return nil, errors.New("identity: decryption failed (wrong key?)")
+		return nil, ErrWrongKey
 	}
 	return plain, nil
 }

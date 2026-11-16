@@ -70,6 +70,45 @@ func TestStoreRoundTripAndEncryptedAtRest(t *testing.T) {
 	}
 }
 
+// TestPutOverwritesWrongKeyFile proves that `creds put` re-establishes an
+// account whose stored file was encrypted under a different key (the key
+// changed), instead of refusing with a decryption error.
+func TestPutOverwritesWrongKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Store under key A.
+	keyA := testKey(t)
+	sA, err := NewFileStore(dir, keyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sA.PutCredentials(ctx, "http://old", "bob", Credentials{UsernameOrEmail: "old@x", Password: "old"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A different key B cannot read it...
+	var keyB [32]byte
+	keyB[0] = 9
+	sB, err := NewFileStore(dir, &keyB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sB.GetCredentials(ctx, "bob"); !errors.Is(err, ErrWrongKey) {
+		t.Fatalf("want ErrWrongKey reading A's file with B, got %v", err)
+	}
+
+	// ...but a put under B overwrites it and then reads back under B.
+	fresh := Credentials{UsernameOrEmail: "new@x", Password: "new"}
+	if err := sB.PutCredentials(ctx, "http://new", "bob", fresh); err != nil {
+		t.Fatalf("put under new key should overwrite, got %v", err)
+	}
+	got, err := sB.GetCredentials(ctx, "bob")
+	if err != nil || got != fresh {
+		t.Fatalf("read-back under new key: %+v %v", got, err)
+	}
+}
+
 func TestKeyFromEnvValidation(t *testing.T) {
 	t.Setenv(KeyEnv, base64.StdEncoding.EncodeToString([]byte("short")))
 	if _, err := KeyFromEnv(); err == nil {

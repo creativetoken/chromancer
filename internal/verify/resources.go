@@ -139,6 +139,9 @@ type yamlFile struct {
 
 // LoadResources reads and validates a resources YAML file.
 func LoadResources(path string) (*Resources, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("resources: no config file given; set $AGENTBROWSER_RESOURCES or pass --resources FILE (see configs/resources.example.yaml)")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("resources: %w", err)

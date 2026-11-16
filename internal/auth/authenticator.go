@@ -118,7 +118,10 @@ func (a *Authenticator) tryRestore(ctx context.Context, p *browser.Page, rec *ha
 		return true, handback.Result{}, false
 	}
 	base := Baseline{URL: ""}
-	ok, ev := SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs())
+	// Restored session: do NOT trust injected cookies/storage as proof (every
+	// cookie looks "new" against the empty baseline). Require a server-confirmed
+	// signal; otherwise treat the session as stale and run a real login.
+	ok, ev := SuccessDetector{}.IsAuthenticated(ctx, p, st, base, rec.PostLoginXHRs(), false)
 	if !ok {
 		return true, handback.Result{}, false
 	}
@@ -246,7 +249,7 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 			continue
 		}
 		// Authenticated?
-		if ok, ev := (SuccessDetector{}).IsAuthenticated(ctx, p, st, a.base, rec.PostLoginXHRs()); ok {
+		if ok, ev := (SuccessDetector{}).IsAuthenticated(ctx, p, st, a.base, rec.PostLoginXHRs(), true); ok {
 			a.trace.SuccessEvidence = ev
 			a.trace.Add("authenticated: %s", strings.Join(ev, ", "))
 			a.settleSolve(ctx, true, rec) // reaching authenticated means the CAPTCHA was accepted

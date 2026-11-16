@@ -165,3 +165,12 @@
   progress (same signature twice), or the step cap. Lab app `menu-signup` hides its signup at a
   non-guessable path behind an account menu so only this path can reach it. `App.AuthModel` is a
   test seam to script the classify model for entry discovery.
+- 2026-11-16 · **Restored-session validation does not trust injected cookies/storage** · the
+  saved session is imported into a blank page, so the restore check runs against an empty baseline
+  where every cookie looks "new"; infrastructure cookies (Freshservice `_itildesk_session`,
+  Cloudflare `__cf_bm`, reCAPTCHA `_GRECAPTCHA`) then masqueraded as `new_auth_cookie` and a
+  logged-out bot-challenge page was reported "restored healthy session, no login" with a
+  non-replayable bundle · `SuccessDetector.IsAuthenticated` gained a `trustStorage` arg: false on
+  restore (require a server-confirmed signal — /me 2xx or an authed-only element — else fall through
+  to a real login), true on live login (server mints the cookies during the flow). Cookie/storage
+  scoring extracted to the pure `storageEvidence` helper and unit-tested with the Freshservice set.

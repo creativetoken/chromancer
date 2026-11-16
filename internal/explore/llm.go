@@ -79,7 +79,7 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 	base := basePrefix(e.Page.URL())
 	noNew := 0
 	loopCount := map[string]int{}
-	loopWarned := false
+	stuckSkips := 0
 
 	for step := 1; step <= maxSteps; step++ {
 		if e.Budget != nil {
@@ -106,6 +106,7 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 				rep.URLTemplates = append(rep.URLTemplates, tmpl)
 			}
 			noNew = 0
+			stuckSkips = 0 // reaching a new state is real progress
 		} else {
 			noNew++
 			if noNew >= e.MaxNoNew {
@@ -114,7 +115,7 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 			}
 		}
 
-		obs := e.observe(st, hash, mem, maxSteps-step, loopWarned)
+		obs := e.observe(st, hash, mem, maxSteps-step, stuckSkips > 0)
 		act, usage := e.decide(ctx, obs)
 		if usage != nil {
 			rep.InTokens += usage.InputTokens
@@ -128,25 +129,34 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 			ts.InTokens, ts.OutTokens = usage.InputTokens, usage.OutputTokens
 		}
 
-		// Loop detection on (state, action, id).
-		lk := string(hash) + "|" + act.Action + fmt.Sprint(act.ID)
-		loopCount[lk]++
-		if loopCount[lk] >= 3 {
-			if !loopWarned {
-				loopWarned = true
-				mem.note("You are repeating the same action on the same page; try a new area or call done.")
-				ts.Outcome = "loop_warning"
+		// Loop detection on (state, action, id): a repeat of the exact same action
+		// on the exact same state already produced no new state, so running it
+		// again is pointless. Skip it (don't execute), tell the model that element
+		// is a dead end, and let it choose something else — a single stuck control
+		// must not end an otherwise-productive crawl. Only a run of consecutive
+		// dead-end picks (the model truly stuck) stops the crawl; plateau still
+		// bounds genuine no-progress.
+		if act.Action == "click" || act.Action == "type" || act.Action == "select" || act.Action == "submit" {
+			lk := string(hash) + "|" + act.Action + fmt.Sprint(act.ID)
+			loopCount[lk]++
+			if loopCount[lk] >= 2 {
+				stuckSkips++
+				mem.note(fmt.Sprintf("Element %d via %s here is a dead end (no new effect); do NOT pick it again — choose a different element or navigate elsewhere.", act.ID, act.Action))
+				ts.Outcome = "loop_skip"
 				rep.Trace = append(rep.Trace, ts)
+				mem.record(act, "skipped: dead-end element")
+				if stuckSkips >= 6 {
+					rep.StopReason = "loop"
+					break
+				}
 				continue
 			}
-			rep.StopReason = "loop"
-			ts.Outcome = "loop_stop"
-			rep.Trace = append(rep.Trace, ts)
-			break
 		}
-		loopWarned = false
 
 		done, outcome := e.applyAction(ctx, ex, st, act, &ts, rep, base, mem)
+		if outcome != "no visible change" {
+			stuckSkips = 0
+		}
 		mem.record(act, outcome)
 		rep.Trace = append(rep.Trace, ts)
 		if done {

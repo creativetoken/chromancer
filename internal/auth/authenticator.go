@@ -133,6 +133,11 @@ func (a *Authenticator) tryRestore(ctx context.Context, p *browser.Page, rec *ha
 }
 
 func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
+	// Flow start, captured BEFORE the first form submit. A verification code is
+	// sent when the form is submitted (below), so this is the lower bound for
+	// "code newer than the flow" — set it here, not in resolve (which runs after
+	// the submit), or the just-sent code would be excluded.
+	since := time.Now()
 	root := a.Target
 	res := &entry.Resolver{CacheDir: a.EntryCache}
 	check := func(st perceive.State, m entry.Mode) (bool, string) {
@@ -189,12 +194,15 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 	if err := handler.Run(ctx, st, a.Creds, deps); err != nil {
 		return err
 	}
-	return a.resolve(ctx, p, rec, deps, mode)
+	return a.resolve(ctx, p, rec, deps, mode, since)
 }
 
 // resolve is the post-submit loop: success | verification | account-exists →
-// login | form-error recovery | SSO-only | stuck.
-func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode) error {
+// login | form-error recovery | SSO-only | stuck. since is the flow-start time
+// (captured by authenticate before the first submit): verification only accepts
+// a code/link newer than it, so a stale code from an earlier attempt is never
+// grabbed while the code this flow just triggered still qualifies.
+func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode, since time.Time) error {
 	maxSteps := a.MaxSteps
 	if maxSteps == 0 {
 		maxSteps = 6
@@ -202,12 +210,6 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 	formErrRetries := 0
 	verified := false
 	handoffUsed := false
-	// since bounds how far back a verification code/link may be: only mail newer
-	// than the moment the flow began counts, so a stale code from an earlier
-	// attempt is never grabbed. The code for this flow is sent later (when the
-	// login form is submitted), so the flow start is a safe lower bound; the
-	// provider's own clock-skew allowance covers a code sent a little early.
-	since := time.Now()
 	actedHash := map[perceive.StateHash]int{}
 	// escalate hands a dead end (stuck / unknown flow) to a human when one is
 	// configured, once; otherwise it returns the sentinel error.

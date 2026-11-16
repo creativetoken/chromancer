@@ -139,12 +139,13 @@ func (a *App) RunCrawl(ctx context.Context, account string, opts CrawlOptions, a
 		Secrets:      crawlSecrets(creds),
 	}
 	if driver == explore.DriverLLM || driver == explore.DriverHybrid {
-		if a.Router == nil {
+		switch {
+		case a.CrawlModel != nil:
+			ex.Model = a.CrawlModel
+		case a.Router != nil && a.Router.For(model.TaskPlan) != nil:
+			ex.Model = a.Router.For(model.TaskPlan)
+		default:
 			return CrawlResult{Err: fmt.Errorf("driver %q needs an LLM provider; none configured (set a model API key)", driver), Reason: "flow_failed"}
-		}
-		ex.Model = a.Router.For(model.TaskPlan)
-		if ex.Model == nil {
-			return CrawlResult{Err: fmt.Errorf("driver %q needs an LLM provider; router returned none", driver), Reason: "flow_failed"}
 		}
 	}
 	rep, err := ex.Crawl(bctx)

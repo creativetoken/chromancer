@@ -19,6 +19,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/captcha/solver"
 	"github.com/creativetoken/chromancer/internal/config"
 	"github.com/creativetoken/chromancer/internal/core"
+	"github.com/creativetoken/chromancer/internal/explore"
 	"github.com/creativetoken/chromancer/internal/handback"
 	"github.com/creativetoken/chromancer/internal/identity"
 	"github.com/creativetoken/chromancer/internal/model"
@@ -40,6 +41,9 @@ type App struct {
 	Key    *[32]byte
 	Creds  identity.CredentialStore
 	Router model.ModelRouter
+	// CrawlModel, when set, overrides the router's model for the LLM/hybrid crawl
+	// driver. Used by tests to script a deterministic action sequence.
+	CrawlModel explore.LLMModel
 }
 
 // New builds an App from config, reading the store key from the environment.

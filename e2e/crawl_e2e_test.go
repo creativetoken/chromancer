@@ -42,7 +42,7 @@ func TestE2ECrawl(t *testing.T) {
 	}
 
 	// 2. Crawl.
-	cr := a.RunCrawl(context.Background(), "alice", nil)
+	cr := a.RunCrawl(context.Background(), "alice", app.CrawlOptions{}, nil)
 	if cr.Err != nil {
 		t.Fatalf("crawl: %v", cr.Err)
 	}

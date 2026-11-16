@@ -188,11 +188,18 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 		return false, "no_change"
 	case "navigate":
 		ts.URL = act.URL
-		if act.URL == "" || !strings.HasPrefix(resolveURL(before, act.URL), base) {
+		abs := resolveURL(before, act.URL)
+		if act.URL == "" || !strings.HasPrefix(abs, base) {
 			ts.Outcome = "off_scope"
 			return false, "off_scope (stay within the application)"
 		}
-		return false, e.outcomeFrom(ctx, ex.Navigate(ctx, resolveURL(before, act.URL), act.Why), ts, before)
+		err := ex.Navigate(ctx, abs, act.Why)
+		if b, ok := err.(*Blocked); ok {
+			ex.recordDenied(rep, "", act.URL)
+			ts.Outcome = "blocked:" + b.Category
+			return false, "blocked: " + b.Category
+		}
+		return false, e.outcomeFrom(ctx, err, ts, before)
 	case "back":
 		return false, e.outcomeFrom(ctx, ex.Back(ctx), ts, before)
 	case "scroll":

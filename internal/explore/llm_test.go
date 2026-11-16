@@ -161,3 +161,29 @@ func TestParseActionTolerant(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSubmitLike(t *testing.T) {
+	yes := []perceive.Node{
+		{Tag: "button", Type: "submit", Name: "x"},
+		{Tag: "button", Name: "Save settings"},
+		{Tag: "button", Name: "Post"},
+		{Tag: "button", Name: "Update profile"},
+		{Tag: "div", Role: "button", Name: "Submit"},
+	}
+	no := []perceive.Node{
+		{Tag: "button", Name: "Cancel"},
+		{Tag: "a", Name: "Save", Href: "/x"}, // a link, not a button
+		{Tag: "button", Name: "Next page"},
+		{Tag: "input", Type: "text", Name: "Save slot"},
+	}
+	for _, n := range yes {
+		if !isSubmitLike(&n) {
+			t.Errorf("expected submit-like: %+v", n)
+		}
+	}
+	for _, n := range no {
+		if isSubmitLike(&n) {
+			t.Errorf("expected NOT submit-like: %+v", n)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -122,6 +123,9 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 			rep.OutTokens += usage.OutputTokens
 			rep.CostUSD += usage.CostUSD
 		}
+		if act.Action == "note" && (strings.Contains(act.Why, "unparseable") || strings.Contains(act.Why, "model error")) {
+			mem.note(`Your last reply was not a valid action. Respond with exactly ONE JSON object and nothing else, e.g. {"action":"click","id":12,"why":"..."}.`)
+		}
 		rep.Steps = step
 
 		ts := TraceStep{N: step, Action: act.Action, Why: act.Why, URL: st.URL, StateID: shortHash(hash)}
@@ -226,6 +230,11 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 		switch act.Action {
 		case "click":
 			err = ex.Click(ctx, n, act.Why)
+			// A click on a submit/save button is a form submission too (the model
+			// often uses click rather than the submit action).
+			if err == nil && isSubmitLike(n) {
+				rep.FormsSubmitted++
+			}
 		case "submit":
 			err = ex.Submit(ctx, n, act.Why)
 			if err == nil {
@@ -409,6 +418,19 @@ func (e *Explorer) ensureAuthed(ctx context.Context, st perceive.State, rep *Rep
 	}
 	rep.Relogins++
 	return true
+}
+
+var submitNameRe = regexp.MustCompile(`(?i)\b(save|submit|post|send|update|create|publish|apply|confirm|sign ?up|register)\b`)
+
+// isSubmitLike reports whether a node is a form submit/save control.
+func isSubmitLike(n *perceive.Node) bool {
+	if n.Type == "submit" {
+		return true
+	}
+	if n.Tag != "button" && strings.ToLower(n.Role) != "button" {
+		return false
+	}
+	return submitNameRe.MatchString(nodeLabel(n))
 }
 
 func findNode(st perceive.State, id int) *perceive.Node {

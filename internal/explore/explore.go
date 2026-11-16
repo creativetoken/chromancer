@@ -22,13 +22,35 @@ type DeniedAction struct {
 
 // Report summarises a crawl.
 type Report struct {
+	Driver         string         `json:"driver,omitempty"` // bfs | llm | hybrid
 	StatesVisited  int            `json:"states_visited"`
 	URLTemplates   []string       `json:"url_templates"`
 	FormsSubmitted int            `json:"forms_submitted"`
 	Denied         []DeniedAction `json:"denied_actions"`
 	Relogins       int            `json:"relogins"`
-	StopReason     string         `json:"stop_reason"` // budget | plateau | frontier_empty | auth_lost
+	StopReason     string         `json:"stop_reason"` // budget | plateau | frontier_empty | auth_lost | model_done | steps | loop
 	Pages          int            `json:"pages"`
+	// LLM/hybrid driver accounting.
+	Steps     int         `json:"steps,omitempty"`
+	InTokens  int         `json:"in_tokens,omitempty"`
+	OutTokens int         `json:"out_tokens,omitempty"`
+	CostUSD   float64     `json:"cost_usd,omitempty"`
+	Notes     []string    `json:"notes,omitempty"`
+	Flags     []string    `json:"flags,omitempty"` // foreign identity values etc.
+	Trace     []TraceStep `json:"-"`               // written to a file by the caller
+}
+
+// TraceStep is one LLM-driver step for the written step trace.
+type TraceStep struct {
+	N         int    `json:"n"`
+	Action    string `json:"action"`
+	Why       string `json:"why,omitempty"`
+	TargetID  int    `json:"target_id,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Outcome   string `json:"outcome"`
+	StateID   string `json:"state_id,omitempty"`
+	InTokens  int    `json:"in_tokens,omitempty"`
+	OutTokens int    `json:"out_tokens,omitempty"`
 }
 
 // AuthCheck reports whether the current page still looks authenticated.
@@ -36,6 +58,16 @@ type AuthCheck func(ctx context.Context, p *browser.Page, st perceive.State) boo
 
 // Relogin re-establishes the session (and reloads) when it drops mid-crawl.
 type Relogin func(ctx context.Context) error
+
+// Driver selects how the crawl decides what to do next.
+type Driver string
+
+// Crawl drivers.
+const (
+	DriverBFS    Driver = "bfs"    // deterministic breadth-first link following
+	DriverLLM    Driver = "llm"    // an LLM chooses one action per step
+	DriverHybrid Driver = "hybrid" // BFS breadth + LLM for forms/ambiguous controls
+)
 
 // Explorer crawls an authenticated app like a normal user.
 type Explorer struct {
@@ -49,11 +81,38 @@ type Explorer struct {
 	MaxPages    int           // hard cap on page visits (default 60)
 	SubmitForms bool          // fill+submit a representative form per state (default true)
 	PerAction   time.Duration // per-action timeout (default 8s)
+
+	// Driver selects bfs (default), llm or hybrid.
+	Driver Driver
+	// Model is required for the llm and hybrid drivers.
+	Model LLMModel
+	// Secrets are the account values the Executor substitutes for placeholders.
+	Secrets Secrets
+	// Prompt is the operator's free-text instruction (llm/hybrid).
+	Prompt string
+	// SystemPrompt overrides the embedded system template (optional).
+	SystemPrompt string
+	// MaxSteps caps LLM-driver steps (default 30).
+	MaxSteps int
+	// ObsTokenBudget bounds the observation size (default ~2000 tokens).
+	ObsTokenBudget int
 }
 
 // Crawl runs the authenticated exploration starting from the page's current
-// location. It returns a Report. It never clicks an account-safety control.
+// location, dispatching on Driver. It never takes an account-safety action.
 func (e *Explorer) Crawl(ctx context.Context) (*Report, error) {
+	switch e.Driver {
+	case DriverLLM:
+		return e.llmCrawl(ctx)
+	case DriverHybrid:
+		return e.hybridCrawl(ctx)
+	default:
+		return e.bfsCrawl(ctx)
+	}
+}
+
+// bfsCrawl is the deterministic breadth-first driver.
+func (e *Explorer) bfsCrawl(ctx context.Context) (*Report, error) {
 	if e.Perceiver == nil {
 		e.Perceiver = perceive.New()
 	}
@@ -66,7 +125,7 @@ func (e *Explorer) Crawl(ctx context.Context) (*Report, error) {
 	if e.PerAction == 0 {
 		e.PerAction = 8 * time.Second
 	}
-	rep := &Report{}
+	rep := &Report{Driver: string(DriverBFS)}
 	start := e.Page.URL()
 	base := basePrefix(start)
 	visitedHash := map[perceive.StateHash]bool{}

@@ -30,8 +30,13 @@ between pages, so always use the current page's list.
 # Filling forms safely
 
 Invent reasonable values for ordinary fields (names, titles, descriptions,
-search terms). For the signed-in account's own credentials, DO NOT guess —
-type these placeholders exactly and the system substitutes the real value:
+search terms). After you fill a form's fields, SUBMIT it in the next step —
+click its submit/save/post/send button (use `submit(id)` or `click(id)`) before
+moving on. If a submit button looks disabled after typing, try clicking the
+field again or pressing it anyway once; if it still will not submit, move on
+rather than retyping. For the signed-in account's own credentials, DO NOT
+guess — type these placeholders exactly and the system substitutes the real
+value:
 
 - `{{account.email}}` — the account's email address
 - `{{account.password}}` — the account's password

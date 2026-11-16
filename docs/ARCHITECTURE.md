@@ -458,6 +458,34 @@ Starting from a **SessionBundle**, a later phase crawls the authenticated app:
   allowlist.)
 Phase 2 reuses v1's perception, model abstraction, skills, budgets and audit unchanged. (ADR 0013.)
 
+### 9.1 Crawl drivers (built)
+
+`Explorer.Crawl` dispatches on a **Driver**:
+
+- **bfs** (default): the deterministic breadth-first driver above — follow first-party `<a href>`
+  links under the base prefix, dedup by `simhash + path_template`, submit a representative form per
+  template.
+- **llm**: an LLM chooses **one action per step** (`click/type/select/submit/navigate/scroll/back/
+  wait/note/done`, each with a one-line `why`) via `model.LLMProvider.Structured` (native
+  tool-calling or the JSON-schema fallback from the capability ladder). Each step builds a compact
+  **observation** — URL/title, the visible interactive elements (each with a stable numeric id =
+  perceive handle), any page message, a **memory** block (visited states, recent actions+outcomes,
+  remaining steps, loop/notes), and untrusted page text in a clearly delimited **DATA** section —
+  bounded by a token budget. Stops on `done`, budget, plateau, or loop detection (same state+action
+  ×3 → warn, then stop). A step **trace** is written to the workspace.
+- **hybrid**: BFS owns breadth; a state with a fillable form is handed to a short, focused LLM
+  sub-loop that fills and submits it.
+
+**Shared `Executor`** is the single enforcement point for every driver: it checks the
+account-safety **deny-list** before every click/submit/navigate (returning `blocked:<category>` to
+the LLM, which then picks something else), substitutes secret **placeholders**
+(`{{account.password|email|phone}}`, `{{totp}}`) at type time so **real values never enter the
+model context** (the audit records only the placeholder), and flags model-invented values typed
+into identity fields. The deny-list matches after normalising separators, so `/x/delete-account`
+is caught like the label "Delete account". Page content and the operator prompt are **untrusted**;
+defence lives in code, not prompt wording. An operator prompt can refocus the crawl but cannot
+disable the deny-list. (DECISIONS: "LLM-driven crawl".)
+
 ---
 
 ## 10. Module boundaries (Go packages)

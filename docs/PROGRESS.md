@@ -2,6 +2,33 @@
 
 > Single source of truth for resuming. On restart: read this file and `DECISIONS.md` first.
 
+## LLM-driven crawl (driver: bfs | llm | hybrid)
+- [x] **Shared `explore.Executor`** — the enforcement point for every driver: account-safety
+  deny-list before click/submit/navigate (normalised separators so `/x/delete-account` is caught),
+  secret placeholder substitution at type time (real values never enter the model; audit logs the
+  placeholder), foreign-identity-value flagging. Pure helpers unit-tested.
+- [x] **`llm` driver** — one action/step via `model.LLMProvider.Structured`; compact observation
+  (interactive elements with stable ids, page message, memory block, untrusted DATA section) within
+  a token budget; actions click/type/select/submit/navigate/scroll/back/wait/note/done; stop on
+  done/budget/plateau/loop; step trace written to the workspace. Embedded system prompt
+  (`internal/explore/prompts/crawl_system.md`), operator prompt inserted into a delimited section,
+  `--system-prompt-file` override.
+- [x] **`hybrid` driver** — BFS breadth + a focused LLM sub-loop for forms. *(Frontier-choice
+  delegation to the LLM is a future refinement.)*
+- [x] **Wiring** — CLI `crawl --driver --prompt/--prompt-file --max-steps --system-prompt-file`
+  (default bfs; `--prompt` implies llm); MCP `start_crawl(account, driver?, prompt?, max_steps?)`;
+  `RunCrawl(CrawlOptions)`.
+- [x] **Tests** — unit: observation/no-secret-leak/token-budget, operator-prompt insertion,
+  decision parsing, deny-list separator forms, injection-block path. e2e (mock model): `llm` covers
+  sections + submits a form + is blocked from an injected delete-account + asserts the password
+  never reaches the model; `hybrid` BFS breadth + LLM form-fill; BFS unchanged. Lab crawl dashboard
+  carries a prompt-injection decoy.
+- [x] **Eval** — `agentbrowser eval --crawl` benchmarks bfs/llm/hybrid on the crawl lab
+  (ground-truth coverage, forms, denied, steps, tokens, cost, time). llm/hybrid need a real model
+  configured; offline the mock under-covers (bfs is the offline baseline).
+- [~] **Remaining** — hybrid frontier-choice delegation; loop-detection + budget-stop dedicated
+  e2e (logic is wired and exercised indirectly); live run with a real provider key.
+
 ## Active work: **Verification module (V1–V5)** — the agent fetches 2FA codes/links itself (Twilio SMS, Gmail IMAP, TOTP incl. enrolment capture). CLI/MCP stay as fallbacks.
 - [ ] **V1 — identity resources + config + shared extraction/claiming.** YAML resources (phones,
   mailboxes, providers, accounts, totp), startup validation (fail fast, never print secrets);

@@ -190,6 +190,94 @@ func (h *Harness) verifierFor(sc Scenario, e lab.Expect) app.Asker {
 	return &labAsker{base: h.LabBase, app: sc.App}
 }
 
+// CrawlRow is one driver's result on the crawl benchmark.
+type CrawlRow struct {
+	Driver        string  `json:"driver"`
+	StatesReached int     `json:"states_reached"`
+	GroundTruth   int     `json:"ground_truth"`
+	Coverage      float64 `json:"coverage"`
+	Forms         int     `json:"forms_submitted"`
+	Denied        int     `json:"denied"`
+	Steps         int     `json:"steps"`
+	Tokens        int     `json:"tokens"`
+	CostUSD       float64 `json:"cost_usd"`
+	Millis        int64   `json:"ms"`
+	Stop          string  `json:"stop_reason"`
+	Err           string  `json:"error,omitempty"`
+}
+
+// CrawlBench benchmarks each driver against the lab crawl app: it authenticates
+// once per driver, runs the crawl, and measures ground-truth state coverage,
+// forms submitted, denied actions, steps, tokens, cost and wall time. The llm
+// and hybrid drivers need a real model configured (offline they under-cover, as
+// the mock cannot navigate).
+func (h *Harness) CrawlBench(ctx context.Context, drivers []string) ([]CrawlRow, error) {
+	e, ok := h.Lab.ExpectFor("crawl")
+	if !ok {
+		return nil, fmt.Errorf("eval: crawl app not in lab")
+	}
+	gt := lab.CrawlStates
+	var rows []CrawlRow
+	for _, d := range drivers {
+		h.Lab.Reset()
+		account := "crawl-" + d
+		_ = h.App.Creds.PutCredentials(ctx, e.Root, identity.AccountID(account),
+			identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password})
+		row := CrawlRow{Driver: d, GroundTruth: len(gt)}
+		if r := h.App.RunAuth(ctx, account, auth.Login, auth.Hints{LoginURL: e.LoginURL}, nil); r.Err != nil {
+			row.Err = "auth: " + r.Err.Error()
+			rows = append(rows, row)
+			continue
+		}
+		if h.Counter != nil {
+			h.Counter.reset()
+		}
+		start := time.Now()
+		cr := h.App.RunCrawl(ctx, account, app.CrawlOptions{Driver: d}, nil)
+		row.Millis = time.Since(start).Milliseconds()
+		if cr.Err != nil {
+			row.Err = cr.Err.Error()
+			rows = append(rows, row)
+			continue
+		}
+		rep := cr.Report
+		reached := map[string]bool{}
+		for _, tm := range rep.URLTemplates {
+			reached[tm] = true
+		}
+		for _, want := range gt {
+			if reached[want] {
+				row.StatesReached++
+			}
+		}
+		row.Coverage = float64(row.StatesReached) / float64(len(gt))
+		row.Forms = rep.FormsSubmitted
+		row.Denied = len(rep.Denied)
+		row.Steps = rep.Steps
+		row.Tokens = rep.InTokens + rep.OutTokens
+		row.CostUSD = rep.CostUSD
+		row.Stop = rep.StopReason
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+// CrawlTable renders the crawl benchmark as a markdown table.
+func CrawlTable(rows []CrawlRow) string {
+	var b strings.Builder
+	b.WriteString("| driver | states | coverage | forms | denied | steps | tokens | cost_usd | ms | stop |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+	for _, r := range rows {
+		stop := r.Stop
+		if r.Err != "" {
+			stop = "ERR: " + r.Err
+		}
+		fmt.Fprintf(&b, "| %s | %d/%d | %.0f%% | %d | %d | %d | %d | %.4f | %d | %s |\n",
+			r.Driver, r.StatesReached, r.GroundTruth, r.Coverage*100, r.Forms, r.Denied, r.Steps, r.Tokens, r.CostUSD, r.Millis, stop)
+	}
+	return b.String()
+}
+
 // CaptchaScenarios benchmarks the solver chain against the mock vendor apps.
 func CaptchaScenarios() []Scenario {
 	return []Scenario{

@@ -202,7 +202,12 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 	formErrRetries := 0
 	verified := false
 	handoffUsed := false
-	var since time.Time
+	// since bounds how far back a verification code/link may be: only mail newer
+	// than the moment the flow began counts, so a stale code from an earlier
+	// attempt is never grabbed. The code for this flow is sent later (when the
+	// login form is submitted), so the flow start is a safe lower bound; the
+	// provider's own clock-skew allowance covers a code sent a little early.
+	since := time.Now()
 	actedHash := map[perceive.StateHash]int{}
 	// escalate hands a dead end (stuck / unknown flow) to a human when one is
 	// configured, once; otherwise it returns the sentinel error.

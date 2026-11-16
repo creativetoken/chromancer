@@ -22,9 +22,32 @@ missing, never printing a value).
 Gmail no longer accepts your normal password over IMAP. Pick one auth mode per
 mailbox with `auth:`.
 
-### OAuth2 (default for Gmail)
+### App password (default for Gmail)
 
-One-time Google Cloud setup:
+The simplest mode, and the Gmail default. It needs **2-Step Verification on**.
+
+1. Turn on 2-Step Verification for the Google account if it isn't already.
+2. Create an app password at https://myaccount.google.com/apppasswords.
+3. Set `GMAIL_USER` to the mailbox address and `GMAIL_APP_PASSWORD` to the app
+   password (16 characters, spaces removed).
+
+Config:
+
+```yaml
+- id: gmail-main
+  host: imap.gmail.com
+  auth: app_password        # the Gmail default; can be omitted
+  username_env: GMAIL_USER
+  password_env: GMAIL_APP_PASSWORD
+```
+
+That's it — no Google Cloud project and no `mailbox login` step. IMAP signs in
+with `LOGIN` using the app password, which is never logged.
+
+### OAuth2 (when app passwords are disabled)
+
+If a Workspace admin has disabled app passwords, use OAuth2 instead. One-time
+Google Cloud setup:
 
 1. Create or pick a project at https://console.cloud.google.com/.
 2. Enable the Gmail API (APIs & Services → Library → Gmail API → Enable).
@@ -34,7 +57,8 @@ One-time Google Cloud setup:
 4. Create credentials → OAuth client ID → Application type **Desktop app**. Note
    the client ID and secret.
 5. Put them in the environment as `GMAIL_OAUTH_CLIENT_ID` and
-   `GMAIL_OAUTH_CLIENT_SECRET`, and set `GMAIL_USER` to the mailbox address.
+   `GMAIL_OAUTH_CLIENT_SECRET`, and set `GMAIL_USER` to the mailbox address. Set
+   `auth: oauth2` on the mailbox.
 
 Then authorize once per mailbox:
 
@@ -48,11 +72,6 @@ and Google redirects to a loopback server on 127.0.0.1 (PKCE, scope
 workspace and is never printed or logged. Access tokens are refreshed
 automatically; if the refresh token is revoked you get a clear message to rerun
 `mailbox login`.
-
-### App password (alternative)
-
-If 2-Step Verification is on, you can create an app password and use
-`auth: app_password` with `username_env` + `password_env` instead of OAuth.
 
 ### Plain password
 

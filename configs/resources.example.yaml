@@ -12,10 +12,15 @@ resources:
   mailboxes:
     - id: gmail-main
       host: imap.gmail.com
-      auth: oauth2                  # Gmail: XOAUTH2 (run `agentbrowser mailbox login`)
+      # Gmail default is an app password (needs 2-Step Verification on): create one
+      # at https://myaccount.google.com/apppasswords and set GMAIL_APP_PASSWORD.
+      auth: app_password
       username_env: GMAIL_USER
-      oauth_client_id_env: GMAIL_OAUTH_CLIENT_ID
-      oauth_client_secret_env: GMAIL_OAUTH_CLIENT_SECRET
+      password_env: GMAIL_APP_PASSWORD
+      # Alternative when app passwords are disabled: auth: oauth2 with
+      #   oauth_client_id_env: GMAIL_OAUTH_CLIENT_ID
+      #   oauth_client_secret_env: GMAIL_OAUTH_CLIENT_SECRET
+      # then run `agentbrowser mailbox login --mailbox gmail-main`.
       address_envs:                 # the alias addresses that land in this mailbox
         - GMAIL_ALIAS_1
         - GMAIL_ALIAS_2

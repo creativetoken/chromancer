@@ -78,14 +78,17 @@ const (
 // IsGmail reports whether this mailbox is on Gmail's IMAP host.
 func (m Mailbox) IsGmail() bool { return strings.EqualFold(m.Host, "imap.gmail.com") }
 
-// AuthMode returns the effective auth mode (oauth2 is the default for Gmail,
-// plain password for other hosts).
+// AuthMode returns the effective auth mode. For Gmail the default is an app
+// password (the simplest mode that works once 2-Step Verification is on, and
+// the same mode the ai-hackbot mailbox reference uses); oauth2 is available for
+// setups where app passwords are disabled. Other hosts default to plain
+// password.
 func (m Mailbox) AuthMode() string {
 	if m.Auth != "" {
 		return strings.ToLower(m.Auth)
 	}
 	if m.IsGmail() {
-		return AuthOAuth2
+		return AuthAppPassword
 	}
 	return AuthPassword
 }
@@ -234,7 +237,7 @@ func (r *Resources) Validate() error {
 			return fmt.Errorf("resources: mailbox %q has unknown auth %q (use oauth2|app_password|password)", m.ID, m.Auth)
 		}
 		if mode == AuthPassword && m.IsGmail() {
-			return fmt.Errorf("resources: mailbox %q: Gmail does not accept a password over IMAP (less-secure app access was removed); use auth: oauth2 (or app_password)", m.ID)
+			return fmt.Errorf("resources: mailbox %q: Gmail does not accept a normal password over IMAP (less-secure app access was removed); use auth: app_password (or oauth2)", m.ID)
 		}
 	}
 	// Each resolved address maps to exactly one mailbox (empties skipped).
@@ -278,7 +281,12 @@ func (r *Resources) Validate() error {
 				need[mb.OAuthClientIDEnv] = "mailbox " + mb.ID + " oauth client id"
 				need[mb.OAuthClientSecretEnv] = "mailbox " + mb.ID + " oauth client secret"
 				// The refresh token comes from `mailbox login`, not an env var.
-			default: // app_password | password
+			case AuthAppPassword:
+				if mb.PasswordEnv == "" {
+					return fmt.Errorf("resources: mailbox %q (app_password) needs password_env (the Gmail app password)", mb.ID)
+				}
+				need[mb.PasswordEnv] = "mailbox " + mb.ID + " app password"
+			default: // password
 				if mb.PasswordEnv != "" {
 					need[mb.PasswordEnv] = "mailbox " + mb.ID + " password"
 				}

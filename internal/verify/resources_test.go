@@ -131,19 +131,27 @@ func TestResourcesRejectsPasswordForGmail(t *testing.T) {
 	setEnvs(t)
 	cfg := strings.Replace(goodConfig, "      auth: app_password", "      auth: password", 1)
 	_, err := LoadResources(writeCfg(t, cfg))
-	if err == nil || !strings.Contains(err.Error(), "Gmail does not accept a password") {
+	if err == nil || !strings.Contains(err.Error(), "Gmail does not accept a normal password") {
 		t.Fatalf("expected Gmail password rejection, got %v", err)
 	}
 }
 
-func TestResourcesGmailDefaultsToOAuth2(t *testing.T) {
+func TestResourcesGmailDefaultsToAppPassword(t *testing.T) {
 	setEnvs(t)
-	// Remove the explicit auth line: Gmail must default to oauth2 and then fail
-	// for want of the oauth client envs (proving the default, not app_password).
+	// Remove the explicit auth line: Gmail must default to app_password, which the
+	// goodConfig already supplies (username_env + password_env), so it loads and
+	// the mailbox reports app_password mode.
 	cfg := strings.Replace(goodConfig, "      auth: app_password\n", "", 1)
-	_, err := LoadResources(writeCfg(t, cfg))
-	if err == nil || !strings.Contains(err.Error(), "oauth_client_id_env") {
-		t.Fatalf("Gmail should default to oauth2, got %v", err)
+	r, err := LoadResources(writeCfg(t, cfg))
+	if err != nil {
+		t.Fatalf("Gmail should default to app_password and load, got %v", err)
+	}
+	mb, ok := r.MailboxForAddress("alias-one@gmail.com")
+	if !ok {
+		t.Fatal("mailbox not found")
+	}
+	if mb.AuthMode() != AuthAppPassword {
+		t.Fatalf("auth mode = %q, want app_password", mb.AuthMode())
 	}
 }
 

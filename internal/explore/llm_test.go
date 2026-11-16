@@ -138,3 +138,26 @@ func TestApplyActionDone(t *testing.T) {
 		t.Fatalf("done not handled: done=%v stop=%q", done, rep.StopReason)
 	}
 }
+
+func TestParseActionTolerant(t *testing.T) {
+	cases := []struct {
+		raw    string
+		action string
+		id     int
+		ok     bool
+	}{
+		{`{"action":"click","id":5,"why":"x"}`, "click", 5, true},
+		{`{"action":"click","id":"7","why":"x"}`, "click", 7, true},                    // id as string
+		{`{"action":{"action":"navigate","url":"/a"},"why":"x"}`, "navigate", 0, true}, // nested
+		{`{"name":"type","arguments":{"id":3,"text":"hi"}}`, "type", 3, true},          // tool-call shape
+		{`{"tool":"submit","parameters":{"id":9}}`, "submit", 9, true},                 // tool shape 2
+		{`{"why":"no action field"}`, "", 0, false},
+		{`not json`, "", 0, false},
+	}
+	for _, c := range cases {
+		a, ok := parseAction([]byte(c.raw))
+		if ok != c.ok || a.Action != c.action || (c.ok && a.ID != c.id) {
+			t.Errorf("parseAction(%s) = (%+v,%v), want action=%q id=%d ok=%v", c.raw, a, ok, c.action, c.id, c.ok)
+		}
+	}
+}

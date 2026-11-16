@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -273,17 +274,95 @@ func (e *Explorer) decide(ctx context.Context, obs string) (llmAction, *model.Us
 		{Role: model.System, Text: sys},
 		{Role: model.User, Text: obs},
 	}
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	raw, usage, err := e.Model.Structured(cctx, msgs, actionSchema, model.ChatOpts{MaxTokens: 400})
+	raw, usage, err := e.Model.Structured(cctx, msgs, actionSchema, model.ChatOpts{MaxTokens: 1024})
 	if err != nil {
+		e.crawlDebug("model error: %v", err)
 		return llmAction{Action: "note", Why: "model error: " + err.Error()}, usage
 	}
-	var a llmAction
-	if err := json.Unmarshal(raw, &a); err != nil || a.Action == "" {
+	a, ok := parseAction(raw)
+	e.crawlDebug("raw=%s parsed=%+v ok=%v", strings.TrimSpace(string(raw)), a, ok)
+	if !ok {
 		return llmAction{Action: "note", Why: "unparseable action"}, usage
 	}
 	return a, usage
+}
+
+func (e *Explorer) crawlDebug(format string, args ...any) {
+	if os.Getenv("AGENTBROWSER_CRAWL_DEBUG") == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[crawl] "+format+"\n", args...)
+}
+
+// parseAction decodes one action tolerantly: it accepts a bare action object or
+// a common wrapper ({"action":{…}}, {"tool":…,"parameters":{…}},
+// {"name":…,"arguments":{…}}), and coerces id/ms given as strings.
+func parseAction(raw []byte) (llmAction, bool) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return llmAction{}, false
+	}
+	// Unwrap tool-call shapes some models emit.
+	if name, ok := m["name"].(string); ok {
+		if args, ok := m["arguments"].(map[string]any); ok {
+			args["action"] = firstStr(args["action"], name)
+			m = args
+		}
+	} else if name, ok := m["tool"].(string); ok {
+		if args, ok := m["parameters"].(map[string]any); ok {
+			args["action"] = firstStr(args["action"], name)
+			m = args
+		}
+	} else if inner, ok := m["action"].(map[string]any); ok {
+		m = inner
+	}
+	a := llmAction{
+		Action: jstr(m["action"]),
+		Text:   jstr(m["text"]),
+		Option: jstr(m["option"]),
+		URL:    jstr(m["url"]),
+		Dir:    jstr(m["dir"]),
+		Why:    jstr(m["why"]),
+		Reason: jstr(m["reason"]),
+		ID:     jint(m["id"]),
+		Ms:     jint(m["ms"]),
+	}
+	return a, a.Action != ""
+}
+
+func jstr(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func jint(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case string:
+		x := 0
+		for _, c := range n {
+			if c < '0' || c > '9' {
+				break
+			}
+			x = x*10 + int(c-'0')
+		}
+		return x
+	}
+	return 0
+}
+
+func firstStr(v any, fallback string) string {
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return fallback
 }
 
 func (e *Explorer) systemPrompt() string {

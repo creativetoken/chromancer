@@ -58,6 +58,11 @@ Order (default): `testmode → native → vision → external → human`.
 3. **vision** — image/text CAPTCHAs via a vision model (the `ModelRouter`, so
    model-agnostic). Text → typed answer; image grid → tile clicks, re-detected
    each round. Applies a confidence threshold; tracks per-model accuracy.
+   This solver **declines unless the configured model reports `Vision`** — the
+   hosted providers (Claude 3+, GPT-4o+, Gemini 1.5+) enable it by default when
+   their provider is selected; the `mock` provider does not. Force it on or off
+   with `AGENTBROWSER_LLM_VISION=1`/`0`. With vision off, image/grid challenges
+   have no automated solver and fall straight through to **human**.
 4. **external** — out-of-process solver plugins (`plugins/captcha-generic/`): a
    generic adapter for the common **create-task → poll → report** service API,
    configured by endpoint/API-key/vendors/price; forwards sitekey, page URL,

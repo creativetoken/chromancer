@@ -73,13 +73,13 @@ func buildRouter(l config.LLMConfig) (model.ModelRouter, error) {
 		// deterministic discovery handles the lab apps.
 		return &model.StaticRouter{Default: model.NewMock(func(string) string { return `{"handle":0,"reason":"mock"}` })}, nil
 	case "openai":
-		p := provider.NewOpenAICompat(provider.OpenAIOptions{BaseURL: l.BaseURL, Model: l.Model, JSONMode: l.JSONMode})
+		p := provider.NewOpenAICompat(provider.OpenAIOptions{BaseURL: l.BaseURL, Model: l.Model, JSONMode: l.JSONMode, Vision: l.Vision})
 		return &model.StaticRouter{Default: p}, nil
 	case "anthropic":
-		p := provider.NewAnthropic(provider.AnthropicOptions{BaseURL: l.BaseURL, Model: l.Model})
+		p := provider.NewAnthropic(provider.AnthropicOptions{BaseURL: l.BaseURL, Model: l.Model, Vision: l.Vision})
 		return &model.StaticRouter{Default: p}, nil
 	case "gemini":
-		p := provider.NewGemini(provider.GeminiOptions{BaseURL: l.BaseURL, Model: l.Model})
+		p := provider.NewGemini(provider.GeminiOptions{BaseURL: l.BaseURL, Model: l.Model, Vision: l.Vision})
 		return &model.StaticRouter{Default: p}, nil
 	default:
 		return nil, fmt.Errorf("app: unknown llm provider %q", l.Provider)

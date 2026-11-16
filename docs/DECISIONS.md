@@ -174,3 +174,11 @@
   restore (require a server-confirmed signal — /me 2xx or an authed-only element — else fall through
   to a real login), true on live login (server mints the cookies during the flow). Cookie/storage
   scoring extracted to the pure `storageEvidence` helper and unit-tested with the Freshservice set.
+- 2026-11-16 · **The LLM provider is built vision-capable by default** · `buildRouter` constructed
+  the Anthropic/OpenAI/Gemini provider without the `Vision` flag, so `Capabilities().Vision` was
+  false; the vision CAPTCHA solver then declined every real image challenge ("no vision-capable model
+  configured") and reCAPTCHA v2 image grids always fell through to human handoff · added
+  `LLMConfig.Vision`, defaulted true for the hosted providers (Claude 3+/GPT-4o+/Gemini 1.5+ all read
+  images) and false for mock, overridable via `AGENTBROWSER_LLM_VISION`. Note: enabling vision lets
+  the solver *engage*; a v2 image grid (cross-origin iframe, multi-round) is still a hard target —
+  the external-plugin slot or not triggering it remain the reliable paths.

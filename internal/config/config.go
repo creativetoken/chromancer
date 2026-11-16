@@ -31,10 +31,27 @@ type CaptureWindow struct {
 
 // LLMConfig selects the provider.
 type LLMConfig struct {
-	Provider string // mock | openai
+	Provider string // mock | openai | anthropic | gemini
 	BaseURL  string
 	Model    string
 	JSONMode bool
+	Vision   bool // provider's model can read images (enables the vision CAPTCHA solver)
+}
+
+// visionDefault reports whether a provider's hosted models are vision-capable by
+// default. The real hosted providers (Claude 3+, GPT-4o+, Gemini 1.5+) all read
+// images; the mock does not. An explicit AGENTBROWSER_LLM_VISION ("1"/"0",
+// "true"/"false") overrides this.
+func visionDefault(provider string) bool {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTBROWSER_LLM_VISION"))); v != "" {
+		return v == "1" || v == "true" || v == "yes"
+	}
+	switch provider {
+	case "openai", "anthropic", "gemini":
+		return true
+	default:
+		return false
+	}
 }
 
 // Default returns a Config with sensible defaults.
@@ -62,7 +79,7 @@ func Default() Config {
 		ProxyURL:  os.Getenv("AGENTBROWSER_PROXY"),
 		Timeout:   5 * time.Minute,
 		Capture:   CaptureWindow{N: 20, T: 10 * time.Second},
-		LLM:       LLMConfig{Provider: prov, JSONMode: true},
+		LLM:       LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov)},
 		StepLimit: 40,
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +117,15 @@ func (p *IMAPProvider) GetCode(ctx context.Context, req Request) (Result, error)
 		folders = conn.folders() // INBOX + the discovered spam/junk folder
 	}
 	for {
+		// Gather candidates from every folder, then try them newest-first. A
+		// re-sent code invalidates the previous one, so the most recent matching
+		// message is the only one worth submitting; picking the oldest would type
+		// a superseded code and get "code is invalid".
+		var (
+			cands                    []parsedMsg
+			fetched                  int
+			nAlias, nNewer, nClaimed int
+		)
 		for _, folder := range folders {
 			msgs, err := conn.fetchRecent(folder, since)
 			if err != nil {
@@ -124,7 +134,7 @@ func (p *IMAPProvider) GetCode(ctx context.Context, req Request) (Result, error)
 				}
 				continue
 			}
-			var nAlias, nNewer, nClaimed, nExtract int
+			fetched += len(msgs)
 			for _, m := range msgs {
 				if !m.toAlias(alias) {
 					continue
@@ -138,22 +148,25 @@ func (p *IMAPProvider) GetCode(ctx context.Context, req Request) (Result, error)
 					nClaimed++
 					continue
 				}
-				res, ok := p.extract(ctx, req, m, domain)
-				if !ok {
-					continue
-				}
-				nExtract++
-				if p.OnScan != nil {
-					p.OnScan(folder, len(msgs), nAlias, nNewer, nClaimed, nExtract)
-				}
-				if p.Claims != nil {
-					p.Claims.Claim(m.id)
-				}
-				return res, nil
+				cands = append(cands, m)
+			}
+		}
+		sort.Slice(cands, func(i, j int) bool { return cands[i].date.After(cands[j].date) })
+		for _, m := range cands {
+			res, ok := p.extract(ctx, req, m, domain)
+			if !ok {
+				continue
 			}
 			if p.OnScan != nil {
-				p.OnScan(folder, len(msgs), nAlias, nNewer, nClaimed, nExtract)
+				p.OnScan("*", fetched, nAlias, nNewer, nClaimed, 1)
 			}
+			if p.Claims != nil {
+				p.Claims.Claim(m.id)
+			}
+			return res, nil
+		}
+		if p.OnScan != nil {
+			p.OnScan("*", fetched, nAlias, nNewer, nClaimed, 0)
 		}
 		select {
 		case <-time.After(poll):
@@ -172,6 +185,11 @@ func (p *IMAPProvider) skew() time.Duration {
 
 // extract pulls a code or link from a message per the request's preference.
 func (p *IMAPProvider) extract(ctx context.Context, req Request, m parsedMsg, domain string) (Result, bool) {
+	// The code may live only in the HTML part (the plain-text part can be a stub
+	// with no code), so search the plain text first and then the tag-stripped
+	// HTML separately (concatenating could duplicate the code and trip the
+	// ambiguity guard). The reference mailbox implementation searches both too.
+	htmlText := stripTags(m.html)
 	linkText := m.text + "\n" + m.html
 	if req.WantLink {
 		if link, ok := ExtractLink(linkText, domain); ok {
@@ -180,6 +198,11 @@ func (p *IMAPProvider) extract(ctx context.Context, req Request, m parsedMsg, do
 	}
 	if code, ok := ExtractCode(m.text); ok {
 		return Result{Kind: ResCode, Code: code}, true
+	}
+	if strings.TrimSpace(htmlText) != "" && htmlText != m.text {
+		if code, ok := ExtractCode(htmlText); ok {
+			return Result{Kind: ResCode, Code: code}, true
+		}
 	}
 	if link, ok := ExtractLink(linkText, domain); ok {
 		return Result{Kind: ResLink, Link: link}, true

@@ -74,6 +74,18 @@ func appendMsg(t *testing.T, user *memory.User, folder, to, subject, contentType
 	}
 }
 
+// appendRaw appends a fully-formed raw message (for multipart bodies).
+func appendRaw(t *testing.T, user *memory.User, folder string, at time.Time, raw string) {
+	t.Helper()
+	mb, err := user.GetMailbox(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mb.CreateMessage([]string{}, at, bytes.NewReader([]byte(raw))); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func getEmail(t *testing.T, p *IMAPProvider, account string, wantLink bool, d time.Duration) (Result, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
@@ -115,6 +127,53 @@ func TestIMAPSinceFiltering(t *testing.T) {
 	_, err := p.GetCode(ctx, Request{Channel: Email, Account: "acct-a", Since: time.Now().Add(time.Minute)})
 	if err != ErrTimeout {
 		t.Fatalf("expected timeout for future Since, got %v", err)
+	}
+}
+
+// A multipart/alternative message whose plain-text part has no code: the code
+// lives only in the HTML part and must still be extracted.
+func TestIMAPCodeOnlyInHTMLPart(t *testing.T) {
+	p, user, stop := imapFixture(t)
+	defer stop()
+	raw := "From: Acme <no-reply@acme.com>\r\n" +
+		"To: alias-one@gmail.com\r\nDelivered-To: alias-one@gmail.com\r\n" +
+		"Subject: Verify Your Identity\r\n" +
+		"Date: " + time.Now().Format(time.RFC1123Z) + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/alternative; boundary=\"b1\"\r\n\r\n" +
+		"--b1\r\nContent-Type: text/plain\r\n\r\n" +
+		"Sign in to Acme. If you did not request this, ignore this email.\r\n" +
+		"--b1\r\nContent-Type: text/html\r\n\r\n" +
+		"<html><body><p>Your verification code is <strong>778899</strong></p></body></html>\r\n" +
+		"--b1--\r\n"
+	appendRaw(t, user, "INBOX", time.Now(), raw)
+
+	r, err := getEmail(t, p, "acct-a", false, 2*time.Second)
+	if err != nil || r.Kind != ResCode || r.Code != "778899" {
+		t.Fatalf("want code 778899 from HTML part, got %+v err=%v", r, err)
+	}
+}
+
+// When several code emails are present (a re-sent code invalidates the prior
+// one), the newest message's code must be returned, not the oldest.
+func TestIMAPReturnsNewestCode(t *testing.T) {
+	p, user, stop := imapFixture(t)
+	defer stop()
+	old := time.Now().Add(-10 * time.Minute)
+	recent := time.Now().Add(-30 * time.Second)
+	mk := func(at time.Time, code string) string {
+		return "From: Acme <no-reply@acme.com>\r\nTo: alias-one@gmail.com\r\n" +
+			"Delivered-To: alias-one@gmail.com\r\nSubject: Verify\r\n" +
+			"Date: " + at.Format(time.RFC1123Z) + "\r\n\r\n" +
+			"Your verification code is " + code + "\r\n"
+	}
+	// Append oldest last to prove ordering is by date, not arrival/UID order.
+	appendRaw(t, user, "INBOX", recent, mk(recent, "222222"))
+	appendRaw(t, user, "INBOX", old, mk(old, "111111"))
+
+	r, err := getEmail(t, p, "acct-a", false, 2*time.Second)
+	if err != nil || r.Code != "222222" {
+		t.Fatalf("want newest code 222222, got %+v err=%v", r, err)
 	}
 }
 

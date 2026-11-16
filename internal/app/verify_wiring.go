@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -71,6 +72,20 @@ func (a *App) BuildVerifyChain(res *verify.Resources, claims *verify.ClaimStore)
 			}
 			return ""
 		},
+	}
+
+	// AGENTBROWSER_VERIFY_DEBUG prints a per-folder funnel (counts only, no
+	// addresses/subjects/codes) so a timed-out email test shows which stage drops
+	// the message: fetched -> aliasMatched -> newer -> extracted.
+	if os.Getenv("AGENTBROWSER_VERIFY_DEBUG") != "" {
+		imap.OnScan = func(folder string, fetched, aliasMatched, newer, claimed, extracted int) {
+			fmt.Fprintf(os.Stderr,
+				"[verify] folder=%s fetched=%d aliasMatched=%d newer=%d alreadyClaimed=%d extracted=%d\n",
+				folder, fetched, aliasMatched, newer, claimed, extracted)
+		}
+		imap.OnFetchError = func(folder string, err error) {
+			fmt.Fprintf(os.Stderr, "[verify] folder=%s FETCH ERROR: %v\n", folder, err)
+		}
 	}
 
 	// TOTP first (instant), then the inbox providers.

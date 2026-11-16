@@ -51,6 +51,14 @@ type IMAPProvider struct {
 	Dial func(mb MailboxDef) (*client.Client, error)
 	// Ambiguous is an optional LLM fallback given one message's text.
 	Ambiguous func(ctx context.Context, subject, from, text string) (kind ResultKind, value string, ok bool)
+	// OnScan, if set, reports a per-folder diagnostic funnel each poll pass. It
+	// receives only counts (never any address, subject, code or link) so it is
+	// safe to log: it shows which stage drops the message.
+	OnScan func(folder string, fetched, aliasMatched, newer, claimed, extracted int)
+	// OnFetchError, if set, reports a folder fetch/login error (otherwise
+	// swallowed so polling can retry). The error is connection/protocol text, not
+	// message content.
+	OnFetchError func(folder string, err error)
 
 	mu   sync.Mutex
 	pool map[string]*mailboxConn
@@ -111,21 +119,40 @@ func (p *IMAPProvider) GetCode(ctx context.Context, req Request) (Result, error)
 		for _, folder := range folders {
 			msgs, err := conn.fetchRecent(folder, since)
 			if err != nil {
+				if p.OnFetchError != nil {
+					p.OnFetchError(folder, err)
+				}
 				continue
 			}
+			var nAlias, nNewer, nClaimed, nExtract int
 			for _, m := range msgs {
-				if !m.toAlias(alias) || !m.date.After(since) {
+				if !m.toAlias(alias) {
 					continue
 				}
+				nAlias++
+				if !m.date.After(since) {
+					continue
+				}
+				nNewer++
 				if p.Claims != nil && p.Claims.Claimed(m.id) {
+					nClaimed++
 					continue
 				}
-				if res, ok := p.extract(ctx, req, m, domain); ok {
-					if p.Claims != nil {
-						p.Claims.Claim(m.id)
-					}
-					return res, nil
+				res, ok := p.extract(ctx, req, m, domain)
+				if !ok {
+					continue
 				}
+				nExtract++
+				if p.OnScan != nil {
+					p.OnScan(folder, len(msgs), nAlias, nNewer, nClaimed, nExtract)
+				}
+				if p.Claims != nil {
+					p.Claims.Claim(m.id)
+				}
+				return res, nil
+			}
+			if p.OnScan != nil {
+				p.OnScan(folder, len(msgs), nAlias, nNewer, nClaimed, nExtract)
 			}
 		}
 		select {
@@ -189,7 +216,15 @@ func defaultDial(mb MailboxDef) (*client.Client, error) {
 		}
 		return c, nil
 	}
-	if err := c.Login(mb.User, mb.Pass); err != nil {
+	user := strings.TrimSpace(mb.User)
+	pass := mb.Pass
+	if strings.EqualFold(mb.Auth, "app_password") {
+		// Google shows an app password as "abcd efgh ijkl mnop"; the spaces are
+		// display-only and are not part of the secret. Strip all whitespace so a
+		// value copied verbatim still works.
+		pass = strings.Join(strings.Fields(pass), "")
+	}
+	if err := c.Login(user, pass); err != nil {
 		_ = c.Logout()
 		return nil, err
 	}

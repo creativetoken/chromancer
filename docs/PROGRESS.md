@@ -25,7 +25,10 @@
 - `make live`: twilio-1 connected, 6 recent inbound, extractor found a code in 3/6 (329ms);
   twilio-2 connected, 0 recent inbound; Gmail skipped (no app password / OAuth client configured).
 - `verify test`: acct-a/sms PASS (got a code) in 228ms; acct-b/sms FAIL (timed out, 0 recent inbound);
-  email UNSUPPORTED (Gmail auth not configured); totp UNSUPPORTED (no seed configured).
+  acct-a/email PASS (app-password IMAP, got a code) in ~5s; totp UNSUPPORTED (no seed configured).
+- Gmail auth is an app password in `GMAIL_IMAP_PASSWORD` (matches the ai-hackbot reference); the
+  Gmail default is `app_password`. A `--debug` funnel (counts only) on `verify test` shows the
+  per-folder fetched→aliasMatched→newer→extracted stages and surfaces IMAP login errors.
 
 ## CAPTCHA module: **complete** — C1–C5 built, tested, tagged `captcha-v1`. Automated solving is the norm; human handoff is the last resort.
 - [x] **C1 — detection & parameter extraction.** Unified detector + pure classifier shared by a

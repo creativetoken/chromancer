@@ -13,10 +13,10 @@ resources:
     - id: gmail-main
       host: imap.gmail.com
       # Gmail default is an app password (needs 2-Step Verification on): create one
-      # at https://myaccount.google.com/apppasswords and set GMAIL_APP_PASSWORD.
+      # at https://myaccount.google.com/apppasswords and set GMAIL_IMAP_PASSWORD.
       auth: app_password
       username_env: GMAIL_USER
-      password_env: GMAIL_APP_PASSWORD
+      password_env: GMAIL_IMAP_PASSWORD
       # Alternative when app passwords are disabled: auth: oauth2 with
       #   oauth_client_id_env: GMAIL_OAUTH_CLIENT_ID
       #   oauth_client_secret_env: GMAIL_OAUTH_CLIENT_SECRET

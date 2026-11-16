@@ -67,12 +67,16 @@ func cmdVerify(ctx context.Context, args []string) error {
 	lookback := fs.Duration("lookback", time.Hour, "how far back to accept an existing message")
 	timeout := fs.Duration("timeout", 90*time.Second, "how long to wait")
 	quiet := fs.Bool("quiet", false, "print only pass/fail + timing, never the value")
+	debug := fs.Bool("debug", false, "print a per-folder match funnel (counts only) to stderr")
 	resPath := fs.String("resources", "", "resources YAML (default $AGENTBROWSER_RESOURCES)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	if *account == "" || *channel == "" {
 		return fmt.Errorf("--account and --channel are required")
+	}
+	if *debug {
+		os.Setenv("AGENTBROWSER_VERIFY_DEBUG", "1")
 	}
 	ch := verify.Channel(*channel)
 	res, err := verify.LoadResources(resourcesPath(*resPath))

@@ -64,7 +64,7 @@ func TestLiveTwilio(t *testing.T) {
 
 func TestLiveGmail(t *testing.T) {
 	user, ok1 := env(t, "GMAIL_USER")
-	pass, ok2 := env(t, "GMAIL_APP_PASSWORD")
+	pass, ok2 := env(t, "GMAIL_IMAP_PASSWORD")
 	if !ok1 || !ok2 {
 		t.Skip("Gmail credentials not set")
 	}

@@ -28,8 +28,9 @@ The simplest mode, and the Gmail default. It needs **2-Step Verification on**.
 
 1. Turn on 2-Step Verification for the Google account if it isn't already.
 2. Create an app password at https://myaccount.google.com/apppasswords.
-3. Set `GMAIL_USER` to the mailbox address and `GMAIL_APP_PASSWORD` to the app
-   password (16 characters, spaces removed).
+3. Set `GMAIL_USER` to the mailbox address and `GMAIL_IMAP_PASSWORD` to the app
+   password. Google displays it as `abcd efgh ijkl mnop`; the spaces are
+   cosmetic and are stripped automatically, so either form works.
 
 Config:
 
@@ -38,7 +39,7 @@ Config:
   host: imap.gmail.com
   auth: app_password        # the Gmail default; can be omitted
   username_env: GMAIL_USER
-  password_env: GMAIL_APP_PASSWORD
+  password_env: GMAIL_IMAP_PASSWORD
 ```
 
 That's it — no Google Cloud project and no `mailbox login` step. IMAP signs in

@@ -135,3 +135,23 @@
   server used by our offline tests (alias separation, Spam, since, claim-once, reconnect); v2 has
   no ready in-memory backend, so moving to it would mean rewriting those tests against a hand-rolled
   server for no behavioural gain · the reference's lessons are transport-agnostic and applied on v1.
+
+### LLM-driven crawl (driver: bfs | llm | hybrid)
+- 2026-11-16 · **One-action-per-step via `model.LLMProvider.Structured`, not a new tool-calling
+  layer** · `Structured(msgs, schema)` already negotiates capabilities (native tool calling →
+  JSON schema → generate/validate/repair), which is exactly the spec's "tool calling with a
+  JSON-schema fallback" · building a separate tool-call path would duplicate that ladder.
+- 2026-11-16 · **The deny-list is enforced in a shared `explore.Executor`, never in the prompt** ·
+  page text and the operator prompt are untrusted; defence lives in code · the Executor checks
+  `DenyReason` before every click/submit/navigate and returns `blocked:<category>` to the model.
+  The BFS driver keeps its existing boundary checks; both share `DenyReason`.
+- 2026-11-16 · **Secrets never enter the model context; the model types placeholders** ·
+  `{{account.password|email|phone}}` and `{{totp}}` are substituted by the Executor at type time,
+  the audit records the placeholder, and values typed into email/phone fields that are not the
+  account's own placeholders are flagged in the trace.
+- 2026-11-16 · **Default driver stays `bfs`** · the LLM driver costs tokens and is opt-in via
+  `--driver llm|hybrid` or by passing `--prompt`/`--prompt-file` · hybrid uses BFS for breadth and
+  the LLM for forms/ambiguous controls/frontier choice.
+- 2026-11-16 · **System prompt in a versioned template `prompts/crawl_system.md`** · overridable
+  with `--system-prompt-file`; the operator prompt is inserted into a clearly delimited
+  "Operator instructions" section and cannot disable the deny-list.

@@ -354,6 +354,7 @@ func allApps() []App {
 		&ssoOnlyApp{},
 		&captchaMockApp{},
 		&captchaBlockApp{},
+		&captchaRerenderApp{},
 		&stuckLoginApp{},
 		&crawlApp{},
 		&menuSignupApp{},

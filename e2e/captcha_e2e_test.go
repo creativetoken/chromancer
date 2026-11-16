@@ -105,6 +105,43 @@ func TestE2ECaptchaBlockHumanHandoff(t *testing.T) {
 	}
 }
 
+// rerenderSolver POSTs the captcha-rerender solve endpoint, like a human
+// solving the challenge in the browser.
+type rerenderSolver struct {
+	t    *testing.T
+	base string
+}
+
+func (s *rerenderSolver) AskHuman(ctx context.Context, req captcha.HandoffRequest) error {
+	httpGet(s.t, s.base+"/captcha-rerender/__human-solve")
+	// As a real operator's solve would, let the page observe the solve and
+	// re-render (swap the submit button) before we return — so the handle
+	// perceived before the hook is now stale.
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// TestE2ECaptchaRerenderStaleHandle reproduces the live failure where solving
+// the CAPTCHA re-rendered the form and the submit handle perceived before the
+// hook went stale ("submit: element … context deadline exceeded"). The handler
+// must re-perceive after the CAPTCHA hook and submit the fresh control; the run
+// should log in rather than fail on a stale handle.
+func TestE2ECaptchaRerenderStaleHandle(t *testing.T) {
+	h := newHarness(t)
+	ts := solver.NewTestMode(map[string]string{"block-sitekey": lab.LabCaptchaToken, "": lab.LabCaptchaToken})
+	handoff := captcha.NewHumanHandoff(&rerenderSolver{t: t, base: h.ts.URL})
+	res, err := h.runCaptcha(t, "captcha-rerender", []captcha.Solver{ts}, handoff)
+	if err != nil {
+		t.Fatalf("captcha-rerender should log in despite the submit button being replaced: %v", err)
+	}
+	if res.Trace.HumanHandoff == "" {
+		t.Fatalf("expected the run to go through a human handoff: %+v", res.Trace)
+	}
+	if len(res.Trace.SuccessEvidence) == 0 {
+		t.Fatalf("expected authentication success evidence: %+v", res.Trace)
+	}
+}
+
 func TestE2ECaptchaBlockHandoffTimeout(t *testing.T) {
 	h := newHarness(t)
 	ts := solver.NewTestMode(map[string]string{"": lab.LabCaptchaToken})

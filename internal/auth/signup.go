@@ -106,10 +106,7 @@ func (h SignupHandler) Run(ctx context.Context, st perceive.State, creds identit
 		}
 	}
 	d.Trace("signup: filled form, submitting")
-	if err := d.beforeSubmit(ctx); err != nil {
-		return err
-	}
-	if err := a.submit(ctx, f, f.Password); err != nil {
+	if err := a.submitAfterCaptcha(ctx, f, f.Password); err != nil {
 		return err
 	}
 	return d.Page.WaitStable(ctx, browser.DefaultStableTimeout)

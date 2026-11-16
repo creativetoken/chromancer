@@ -191,3 +191,13 @@
   consistent with the real build/platform and never leak headless. `AGENTBROWSER_UA` pins an explicit
   UA string. `navigator.webdriver` was already hidden via `disable-blink-features=AutomationControlled`.
   Deriving from the live browser avoids version drift (no hardcoded Chrome version to go stale).
+- 2026-11-16 · **Form handlers re-perceive after the CAPTCHA hook before submitting** · the submit
+  control was located from the perception taken *before* `beforeSubmit`; when the hook hands off to a
+  human who solves a challenge in the browser, the solve callback re-renders the form, so the
+  pre-hook handle is detached and clicking it fails with `submit: element "[data-ab-handle=N]":
+  context deadline exceeded` (seen live on Freshservice) · a shared `actor.submitAfterCaptcha`
+  (used by Form/MultiStep/Signup handlers) runs the hook, then re-perceives and submits the fresh
+  control — or returns if the form already advanced (the solve auto-submitted), letting the resolve
+  loop detect success/verification. Lab app `captcha-rerender` reproduces it (polls solve status and
+  swaps the submit button on solve); its e2e fails on the stale handle without the fix and logs in
+  with it.

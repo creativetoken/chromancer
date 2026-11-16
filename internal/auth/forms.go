@@ -243,6 +243,36 @@ func (a actor) click(ctx context.Context, n *perceive.Node, label string) error 
 	return nil
 }
 
+// submitAfterCaptcha runs the pre-submit CAPTCHA hook and then submits. The
+// hook can mutate the DOM — a human solving a challenge in the browser, or a
+// token callback re-rendering or auto-submitting the form — which invalidates
+// the element handles perceived before it (clicking the stale submit handle
+// then times out). So it re-perceives and re-locates the submit control. If the
+// form has already advanced past the login/signup form (the solve submitted
+// it), it returns without clicking and lets the resolve loop take over.
+func (a actor) submitAfterCaptcha(ctx context.Context, f Fields, fallback *perceive.Node) error {
+	if err := a.d.beforeSubmit(ctx); err != nil {
+		return err
+	}
+	if a.d.Perceiver != nil {
+		if st2, _, err := a.d.Perceiver.Perceive(ctx, a.d.Page); err == nil {
+			f2 := Classify(st2)
+			if f2.Submit == nil && f2.Password == nil && f2.Identifier == nil {
+				a.d.Trace("submit: form advanced after captcha; nothing to click")
+				return nil
+			}
+			f = f2
+			switch {
+			case f2.Password != nil:
+				fallback = f2.Password
+			case f2.Identifier != nil:
+				fallback = f2.Identifier
+			}
+		}
+	}
+	return a.submit(ctx, f, fallback)
+}
+
 func (a actor) submit(ctx context.Context, f Fields, fallback *perceive.Node) error {
 	if f.Submit != nil {
 		return a.click(ctx, f.Submit, "submit")
@@ -290,10 +320,7 @@ func (h FormHandler) Run(ctx context.Context, st perceive.State, creds identity.
 		return fmt.Errorf("type password: %w", err)
 	}
 	d.Trace("form: filled identifier+password, submitting")
-	if err := d.beforeSubmit(ctx); err != nil {
-		return err
-	}
-	if err := a.submit(ctx, f, f.Password); err != nil {
+	if err := a.submitAfterCaptcha(ctx, f, f.Password); err != nil {
 		return fmt.Errorf("submit: %w", err)
 	}
 	return d.Page.WaitStable(ctx, browser.DefaultStableTimeout)
@@ -330,10 +357,7 @@ func (h MultiStepHandler) Run(ctx context.Context, st perceive.State, creds iden
 				return err
 			}
 			d.Trace("multistep: step %d password submitted", step)
-			if err := d.beforeSubmit(ctx); err != nil {
-				return err
-			}
-			if err := a.submit(ctx, f, f.Password); err != nil {
+			if err := a.submitAfterCaptcha(ctx, f, f.Password); err != nil {
 				return err
 			}
 			return d.Page.WaitStable(ctx, browser.DefaultStableTimeout)

@@ -76,7 +76,7 @@ Usage:
   agentbrowser creds put --target URL --account NAME --username U --password P [--totp-seed S]
   agentbrowser auth --account NAME --mode login|signup [--login-url URL] [--signup-url URL] [--headful]
   agentbrowser export-session --account NAME
-  agentbrowser crawl --account NAME [--headful]   # Phase 2: authenticated crawl
+  agentbrowser crawl --account NAME [--driver bfs|llm|hybrid] [--prompt "..."] [--headful]
   agentbrowser eval [--runs N]            # benchmark the configured model vs the lab
   agentbrowser mcp                        # run the MCP server over stdio
   agentbrowser newkey
@@ -165,11 +165,31 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("crawl", flag.ContinueOnError)
 	account := fs.String("account", "", "account name")
 	headful := fs.Bool("headful", false, "run with a visible browser")
+	driver := fs.String("driver", "", "crawl driver: bfs (default) | llm | hybrid")
+	prompt := fs.String("prompt", "", "operator instruction for the llm driver (implies --driver llm)")
+	promptFile := fs.String("prompt-file", "", "read the operator instruction from a file")
+	systemPromptFile := fs.String("system-prompt-file", "", "override the built-in system template")
+	maxSteps := fs.Int("max-steps", 0, "llm driver step cap (0 = default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *account == "" {
 		return fmt.Errorf("--account is required")
+	}
+	opts := app.CrawlOptions{Driver: *driver, Prompt: *prompt, MaxSteps: *maxSteps}
+	if *promptFile != "" {
+		b, err := os.ReadFile(*promptFile)
+		if err != nil {
+			return fmt.Errorf("--prompt-file: %w", err)
+		}
+		opts.Prompt = string(b)
+	}
+	if *systemPromptFile != "" {
+		b, err := os.ReadFile(*systemPromptFile)
+		if err != nil {
+			return fmt.Errorf("--system-prompt-file: %w", err)
+		}
+		opts.SystemPrompt = string(b)
 	}
 	cfg := config.Default()
 	if *headful {
@@ -179,7 +199,7 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	res := a.RunCrawl(ctx, *account, nil)
+	res := a.RunCrawl(ctx, *account, opts, nil)
 	if res.Err != nil {
 		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")
 		fmt.Println(string(out))

@@ -71,7 +71,7 @@ type Job struct {
 // the MCP pending/answer surface for this job.
 type Runner interface {
 	RunAuth(ctx context.Context, account string, mode auth.Mode, hints auth.Hints, asker app.Asker) app.AuthResult
-	RunCrawl(ctx context.Context, account string, asker app.Asker) app.CrawlResult
+	RunCrawl(ctx context.Context, account string, opts app.CrawlOptions, asker app.Asker) app.CrawlResult
 	ExportSession(ctx context.Context, account string) (handback.ArtefactRef, handback.SessionBundle, error)
 }
 
@@ -127,7 +127,7 @@ func (m *JobManager) StartAuth(parent context.Context, account string, mode auth
 }
 
 // StartCrawl launches an authenticated-crawl job (Phase 2) for an account.
-func (m *JobManager) StartCrawl(parent context.Context, account string) (string, error) {
+func (m *JobManager) StartCrawl(parent context.Context, account string, opts app.CrawlOptions) (string, error) {
 	m.mu.Lock()
 	if id, ok := m.active[account]; ok {
 		busy := ErrAccountBusy{Account: account, JobID: id}
@@ -143,13 +143,13 @@ func (m *JobManager) StartCrawl(parent context.Context, account string) (string,
 	m.active[account] = id
 	m.mu.Unlock()
 
-	go m.runCrawl(ctx, j)
+	go m.runCrawl(ctx, j, opts)
 	return id, nil
 }
 
-func (m *JobManager) runCrawl(ctx context.Context, j *Job) {
+func (m *JobManager) runCrawl(ctx context.Context, j *Job, opts app.CrawlOptions) {
 	defer close(j.doneCh)
-	res := m.runner.RunCrawl(ctx, j.Account, &jobAsker{m: m, j: j})
+	res := m.runner.RunCrawl(ctx, j.Account, opts, &jobAsker{m: m, j: j})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()

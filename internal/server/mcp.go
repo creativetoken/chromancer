@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/creativetoken/chromancer/internal/app"
 	"github.com/creativetoken/chromancer/internal/auth"
 )
 
@@ -176,13 +177,16 @@ func (s *MCP) callTool(ctx context.Context, name string, args json.RawMessage) (
 		return map[string]any{"job_id": id}, nil
 	case "start_crawl":
 		var a struct {
-			Account string `json:"account"`
+			Account  string `json:"account"`
+			Driver   string `json:"driver"`
+			Prompt   string `json:"prompt"`
+			MaxSteps int    `json:"max_steps"`
 		}
 		_ = json.Unmarshal(args, &a)
 		if a.Account == "" {
 			return nil, fmt.Errorf("account is required")
 		}
-		id, err := s.jobs.StartCrawl(ctx, a.Account)
+		id, err := s.jobs.StartCrawl(ctx, a.Account, app.CrawlOptions{Driver: a.Driver, Prompt: a.Prompt, MaxSteps: a.MaxSteps})
 		if err != nil {
 			return nil, err
 		}
@@ -283,8 +287,8 @@ func toolDefs() []any {
 		},
 		map[string]any{
 			"name":        "start_crawl",
-			"description": "Phase 2: start an authenticated crawl of the app for an account (uses the saved session; re-logs-in if it drops; never takes account-ending actions). Returns a job_id.",
-			"inputSchema": strObj(map[string]any{"account": str}, "account"),
+			"description": "Phase 2: start an authenticated crawl of the app for an account (uses the saved session; re-logs-in if it drops; never takes account-ending actions). driver is bfs (default), llm or hybrid; prompt is an optional operator instruction for the llm driver (implies llm). Returns a job_id.",
+			"inputSchema": strObj(map[string]any{"account": str, "driver": str, "prompt": str, "max_steps": map[string]any{"type": "integer"}}, "account"),
 		},
 		map[string]any{
 			"name":        "get_job",

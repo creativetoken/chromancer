@@ -42,7 +42,7 @@ func (f *fakeRunner) RunAuth(ctx context.Context, account string, mode auth.Mode
 	return app.AuthResult{Result: f.result, Err: f.err, Reason: f.reason}
 }
 
-func (f *fakeRunner) RunCrawl(ctx context.Context, account string, _ app.Asker) app.CrawlResult {
+func (f *fakeRunner) RunCrawl(ctx context.Context, account string, _ app.CrawlOptions, _ app.Asker) app.CrawlResult {
 	f.mu.Lock()
 	gate := f.gate
 	f.mu.Unlock()

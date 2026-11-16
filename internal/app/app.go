@@ -158,7 +158,8 @@ func (a *App) verifier(account string, creds identity.Credentials, asker verify.
 	// then the ask/CLI fallbacks.
 	if path := os.Getenv("AGENTBROWSER_RESOURCES"); path != "" {
 		if res, err := verify.LoadResources(path); err == nil {
-			chain = append(chain, a.BuildVerifyChain(res, verify.NewClaimStore()))
+			login := &LoginHint{Account: account, Email: creds.UsernameOrEmail}
+			chain = append(chain, a.BuildVerifyChain(res, verify.NewClaimStore(), login))
 		}
 	}
 	chain = append(chain, verify.NewTOTP(func(acc string) string {

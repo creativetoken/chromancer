@@ -8,12 +8,37 @@ import (
 	"github.com/creativetoken/chromancer/internal/verify"
 )
 
+// LoginHint ties the agentbrowser login account to the email/phone it signs in
+// with, so the verify chain can resolve a mailbox for a login account that has
+// no explicit entry in the resources config (its login email is matched against
+// the mailboxes' alias addresses). A nil hint keeps the resources-only
+// behaviour.
+type LoginHint struct {
+	Account string
+	Email   string
+}
+
 // BuildVerifyChain assembles the automatic verification providers from the
 // operator's resources: TOTP (per account+target), Twilio SMS and Gmail IMAP.
 // Secrets are read from the environment by the names the resources declare.
-func (a *App) BuildVerifyChain(res *verify.Resources, claims *verify.ClaimStore) verify.Provider {
+// login, when non-nil, lets the current login account resolve to a mailbox by
+// its login email even if it is not a named account in the resources config.
+func (a *App) BuildVerifyChain(res *verify.Resources, claims *verify.ClaimStore, login *LoginHint) verify.Provider {
 	if claims == nil {
 		claims = verify.NewClaimStore()
+	}
+	// emailFor returns the address to receive verification mail for an account:
+	// its resources entry if present, else the current login account's email.
+	emailFor := func(account string) string {
+		if acc, ok := res.AccountByID(account); ok {
+			if e := acc.ResolveEmail(); e != "" {
+				return e
+			}
+		}
+		if login != nil && login.Account == account {
+			return login.Email
+		}
+		return ""
 	}
 	numberFor := func(account string) string {
 		acc, ok := res.AccountByID(account)
@@ -37,11 +62,7 @@ func (a *App) BuildVerifyChain(res *verify.Resources, claims *verify.ClaimStore)
 	imap := &verify.IMAPProvider{
 		Claims: claims,
 		Resolve: func(account string) (string, verify.MailboxDef, bool) {
-			acc, ok := res.AccountByID(account)
-			if !ok {
-				return "", verify.MailboxDef{}, false
-			}
-			email := acc.ResolveEmail()
+			email := emailFor(account)
 			if email == "" {
 				return "", verify.MailboxDef{}, false
 			}

@@ -87,7 +87,7 @@ func cmdVerify(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	chain := a.BuildVerifyChain(res, verify.NewClaimStore())
+	chain := a.BuildVerifyChain(res, verify.NewClaimStore(), nil)
 	if !chain.Supports(ch, *account) {
 		fmt.Printf("verify %s/%s: UNSUPPORTED (no resource configured for this account and channel)\n", *account, ch)
 		return nil

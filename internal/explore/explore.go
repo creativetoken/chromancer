@@ -96,6 +96,9 @@ type Explorer struct {
 	MaxSteps int
 	// ObsTokenBudget bounds the observation size (default ~2000 tokens).
 	ObsTokenBudget int
+
+	// hybrid is set by hybridCrawl so the shared BFS loop hands forms to the LLM.
+	hybrid bool
 }
 
 // Crawl runs the authenticated exploration starting from the page's current
@@ -200,12 +203,19 @@ func (e *Explorer) bfsCrawl(ctx context.Context) (*Report, error) {
 			}
 		}
 
-		// Exercise a representative form (once per template).
+		// Exercise a representative form (once per template). In hybrid mode an
+		// LLM fills and submits it (richer, context-aware data); otherwise the
+		// deterministic form filler runs.
 		if e.SubmitForms && !submittedTmpl[tmpl] {
-			if e.trySubmitForm(ctx, st, rep) {
+			done := false
+			if e.hybrid && e.Model != nil && stateHasForm(st) {
+				done = e.llmFillForm(ctx, st, rep)
+			} else {
+				done = e.trySubmitForm(ctx, st, rep)
+			}
+			if done {
 				submittedTmpl[tmpl] = true
-				// Re-perceive after submit (state may have changed).
-				st, _, _ = e.perceive(ctx)
+				st, _, _ = e.perceive(ctx) // re-perceive after submit
 			}
 		}
 

@@ -172,19 +172,52 @@ func (r *Resources) PollInterval() time.Duration {
 }
 
 // MailboxForAddress returns the mailbox that receives address (case-insensitive).
+// Matching is sub-addressing-aware: a "+tag" alias resolves to the mailbox for
+// the same base account even when the exact alias is not pre-listed, so a
+// brand-new signup alias (e.g. user+42@host) works. An address matches a mailbox
+// when it equals a listed alias, or when its canonical base equals the canonical
+// base of a listed alias or of the mailbox account (username_env).
 func (r *Resources) MailboxForAddress(addr string) (*Mailbox, bool) {
 	addr = strings.ToLower(strings.TrimSpace(addr))
 	if addr == "" {
 		return nil, false
 	}
+	canon := canonicalAddress(addr)
 	for i := range r.Mailboxes {
-		for _, a := range r.Mailboxes[i].ResolvedAddresses() {
-			if strings.ToLower(strings.TrimSpace(a)) == addr {
-				return &r.Mailboxes[i], true
+		m := &r.Mailboxes[i]
+		for _, a := range m.ResolvedAddresses() {
+			a = strings.ToLower(strings.TrimSpace(a))
+			if a == addr || canonicalAddress(a) == canon {
+				return m, true
 			}
+		}
+		if user := os.Getenv(m.UsernameEnv); user != "" && canonicalAddress(user) == canon {
+			return m, true
 		}
 	}
 	return nil, false
+}
+
+// canonicalAddress reduces an address to the form that identifies one inbox:
+// lowercased, with the "+tag" sub-address removed (supported by Gmail, Outlook /
+// Office 365, Fastmail, iCloud, Proton and most modern providers). Gmail also
+// ignores dots in the local part and treats googlemail.com as gmail.com, so that
+// provider gets that extra normalisation.
+func canonicalAddress(addr string) string {
+	addr = strings.ToLower(strings.TrimSpace(addr))
+	at := strings.LastIndexByte(addr, '@')
+	if at < 0 {
+		return addr
+	}
+	local, domain := addr[:at], addr[at+1:]
+	if plus := strings.IndexByte(local, '+'); plus >= 0 {
+		local = local[:plus]
+	}
+	if domain == "gmail.com" || domain == "googlemail.com" {
+		local = strings.ReplaceAll(local, ".", "")
+		domain = "gmail.com"
+	}
+	return local + "@" + domain
 }
 
 // PhoneByID returns a phone resource by id.

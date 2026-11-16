@@ -168,3 +168,45 @@ func TestLoadResourcesMissingEnv(t *testing.T) {
 		t.Fatalf("expected a missing-env error naming ACCT_B_PASSWORD, got %v", err)
 	}
 }
+
+func TestMailboxForAddressGmailAliases(t *testing.T) {
+	setEnvs(t)
+	r, err := LoadResources(writeCfg(t, goodConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// goodConfig's gmail-main mailbox has username_env GMAIL_USER.
+	t.Setenv("GMAIL_USER", "bugtestingp1@gmail.com")
+	// A brand-new alias not listed anywhere still resolves to the Gmail mailbox.
+	for _, addr := range []string{
+		"bugtestingp1+42@gmail.com",
+		"bugtestingp1+anything@gmail.com",
+		"bug.testing.p1@gmail.com", // dots are ignored by Gmail
+		"BugTestingP1+X@gmail.com", // case-insensitive
+	} {
+		if _, ok := r.MailboxForAddress(addr); !ok {
+			t.Errorf("expected %q to resolve to the gmail mailbox", addr)
+		}
+	}
+	// A different account must NOT resolve.
+	if _, ok := r.MailboxForAddress("someoneelse@gmail.com"); ok {
+		t.Error("a different gmail account must not resolve to this mailbox")
+	}
+}
+
+func TestCanonicalAddress(t *testing.T) {
+	cases := map[string]string{
+		"User+tag@gmail.com":     "user@gmail.com",
+		"u.s.e.r@gmail.com":      "user@gmail.com", // gmail ignores dots
+		"user@gmail.com":         "user@gmail.com",
+		"user+a@googlemail.com":  "user@gmail.com",  // googlemail → gmail
+		"me+signup@fastmail.com": "me@fastmail.com", // generic plus-addressing
+		"a.b+x@outlook.com":      "a.b@outlook.com", // dots kept for non-gmail
+		"plain@example.com":      "plain@example.com",
+	}
+	for in, want := range cases {
+		if got := canonicalAddress(in); got != want {
+			t.Errorf("canonicalAddress(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

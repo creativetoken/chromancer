@@ -82,11 +82,16 @@ refuses it for `imap.gmail.com`.
 ### Aliases
 
 One mailbox can receive several alias addresses (plus-addressing or dot
-variants). List them under the mailbox (`address_envs`) and give each account
-its own alias (`email_env`). A single connection is shared across the accounts
-that alias into the mailbox, and each account only ever receives mail addressed
-to its own alias (matched on To / Delivered-To / X-Original-To). Both INBOX and
-the spam/junk folder are searched, since verification mail often lands in spam.
+variants). You can list specific aliases under the mailbox (`address_envs`) and
+give each account its own alias (`email_env`), but this is optional: any
+`+tag` sub-address of the mailbox account resolves to it automatically (Gmail
+also ignores dots and treats googlemail.com as gmail.com), so a brand-new signup
+alias such as `you+42@gmail.com` works without being pre-listed — it just needs
+to be the account's login email. A single connection is shared across the
+accounts that alias into the mailbox, and each account only ever receives mail
+addressed to its own alias (matched on To / Delivered-To / X-Original-To). Both
+INBOX and the spam/junk folder are searched, since verification mail often lands
+in spam.
 
 ## SMS (Twilio)
 

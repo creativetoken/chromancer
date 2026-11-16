@@ -51,8 +51,12 @@ var (
 func (h SignupHandler) Run(ctx context.Context, st perceive.State, creds identity.Credentials, d FlowDeps) error {
 	a := actor{d}
 	f := Classify(st)
-	if f.Password == nil {
-		return fmt.Errorf("%w: signup has no password field", ErrUnknownFlow)
+	// A passwordless signup (email/magic-code only, e.g. BuzzFeed) has no password
+	// field — that is fine: fill the identifier + profile and submit, and the
+	// verification step completes signup. Only a form with neither an identifier
+	// nor a password is genuinely unhandleable.
+	if f.Password == nil && f.Identifier == nil {
+		return fmt.Errorf("%w: signup form has no identifier or password field", ErrUnknownFlow)
 	}
 	// Identifier (email/username).
 	if f.Identifier != nil {
@@ -71,6 +75,9 @@ func (h SignupHandler) Run(ctx context.Context, st perceive.State, creds identit
 		}
 		switch {
 		case n.Tag == "input" && n.Type == "password":
+			if f.Password == nil {
+				continue // passwordless flow: ignore any stray password field
+			}
 			val := creds.Password
 			if n.Handle != f.Password.Handle {
 				label := n.Name + " " + n.Placeholder + " " + n.NameAttr + " " + n.ID

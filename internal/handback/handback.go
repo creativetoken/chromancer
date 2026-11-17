@@ -49,6 +49,7 @@ type Trace struct {
 	Steps           []string          `json:"steps"`
 	Verification    []string          `json:"verification,omitempty"`
 	Captcha         []string          `json:"captcha,omitempty"`
+	AgentTakeover   []string          `json:"agent_takeover,omitempty"`
 	HumanHandoff    string            `json:"human_handoff,omitempty"`
 	Replayable      bool              `json:"replayable"`
 	ReplayReason    string            `json:"replay_reason,omitempty"`

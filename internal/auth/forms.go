@@ -48,6 +48,14 @@ var (
 	ErrEntryNotFound    = errors.New("entrypoint_not_found")
 	ErrNotAuthenticated = errors.New("not_authenticated")
 	ErrHandoffTimeout   = errors.New("handoff_timeout")
+	// ErrCredentialsRejected is a hard credentials rejection (wrong password /
+	// unknown account) confirmed after a retry: never recovered via agent/human.
+	ErrCredentialsRejected = errors.New("credentials_rejected")
+	// ErrVerifyTimeout is a verification code/link that never arrived in time.
+	ErrVerifyTimeout = errors.New("verify_timeout")
+	// ErrAgentTakeoverFailed is returned when the agent takeover was attempted,
+	// did not authenticate, and no human handoff is available.
+	ErrAgentTakeoverFailed = errors.New("agent_takeover_failed")
 )
 
 var (

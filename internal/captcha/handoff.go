@@ -19,6 +19,7 @@ const (
 	ReasonChallengeLoop    BlockReason = "challenge_loop"
 	ReasonUnknownFlow      BlockReason = "unknown_flow"
 	ReasonStuck            BlockReason = "stuck"
+	ReasonVerifyTimeout    BlockReason = "verify_timeout"
 )
 
 // ErrHandoffTimeout is returned when no operator answers in time.

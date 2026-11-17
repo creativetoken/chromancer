@@ -125,6 +125,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	loginURL := fs.String("login-url", "", "entrypoint hint for login")
 	signupURL := fs.String("signup-url", "", "entrypoint hint for signup")
 	headful := fs.Bool("headful", false, "run with a visible browser")
+	recovery := fs.String("recovery", "agent", "dead-end recovery: agent|human|off (agent falls back to human when no LLM is configured)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -137,6 +138,10 @@ func cmdAuth(ctx context.Context, args []string) error {
 	} else if *mode != "login" {
 		return fmt.Errorf("--mode must be login or signup")
 	}
+	rec, ok := auth.ParseRecoveryMode(*recovery)
+	if !ok {
+		return fmt.Errorf("--recovery must be agent, human or off")
+	}
 	cfg := config.Default()
 	if *headful {
 		cfg.Headless = false
@@ -145,6 +150,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	a.Recovery = rec
 	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL}, nil)
 	if res.Err != nil {
 		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")

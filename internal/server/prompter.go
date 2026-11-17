@@ -69,6 +69,16 @@ type jobAsker struct {
 	j *Job
 }
 
+// Recovering implements app.RecoveryReporter: it records the agent-takeover
+// progress on the job so get_job surfaces recovering{step,reason} while the LLM
+// agent drives the page. It does not change the job's primary State (the job is
+// still running), only annotates it.
+func (a *jobAsker) Recovering(step int, reason string) {
+	a.m.mu.Lock()
+	defer a.m.mu.Unlock()
+	a.j.Recovering = &Recovering{Step: step, Reason: reason}
+}
+
 // AskChallenge implements verify.Asker.
 func (a *jobAsker) AskChallenge(ctx context.Context, channel, account, hint string, deadline time.Time) (string, string, bool, error) {
 	id := fmt.Sprintf("chal-%d", time.Now().UnixNano())

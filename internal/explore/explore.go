@@ -97,8 +97,42 @@ type Explorer struct {
 	// ObsTokenBudget bounds the observation size (default ~2000 tokens).
 	ObsTokenBudget int
 
+	// --- agent-takeover tools (optional) ------------------------------------
+	// When any of these callbacks is set, the LLM driver is in "takeover" mode:
+	// the extra verification/captcha/success/human actions are advertised to the
+	// model (only the ones whose callback is non-nil) and dispatched in
+	// applyAction. They let the agent finish a login the deterministic flow could
+	// not, reusing the caller's existing verifier / captcha / success / handoff
+	// machinery. The callbacks never return or surface a real secret (an OTP code,
+	// a magic link) to the model — only an outcome label.
+
+	// EnterVerification fetches the current verification code/link from the
+	// configured channel (honouring since/claims/alias) and enters it. n is the
+	// model-chosen target field (may be nil; the callback re-detects the field).
+	// It returns a short outcome label, never the code.
+	EnterVerification func(ctx context.Context, n *perceive.Node, channel string, wantLink bool) (string, error)
+	// ResendVerification triggers a fresh code (clicks the resend control, bumps
+	// the since window). n is the model-chosen resend control (may be nil).
+	ResendVerification func(ctx context.Context, n *perceive.Node) error
+	// SolveCaptcha runs the solver chain on the current page. Returns an outcome
+	// label ("solved", "no captcha", …).
+	SolveCaptcha func(ctx context.Context) (string, error)
+	// CheckLoggedIn runs success detection and returns (authenticated, evidence).
+	// This is the ONLY gate on takeover success: the model saying "done" is not
+	// enough.
+	CheckLoggedIn func(ctx context.Context) (bool, []string)
+	// RequestHuman escalates to the human handoff with the model's reason.
+	RequestHuman func(ctx context.Context, reason string) error
+
 	// hybrid is set by hybridCrawl so the shared BFS loop hands forms to the LLM.
 	hybrid bool
+}
+
+// takeoverMode reports whether any agent-takeover tool is wired, enabling the
+// extra actions in the schema and applyAction.
+func (e *Explorer) takeoverMode() bool {
+	return e.EnterVerification != nil || e.ResendVerification != nil ||
+		e.SolveCaptcha != nil || e.CheckLoggedIn != nil || e.RequestHuman != nil
 }
 
 // Crawl runs the authenticated exploration starting from the page's current

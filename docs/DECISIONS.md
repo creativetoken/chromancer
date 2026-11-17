@@ -226,3 +226,31 @@
   `TestIMAPSubAddressSeparation` (two `+N` accounts, interleaved mail, each gets only its own newest
   code). Real relay/inbox addresses live only in the operator's git-ignored `.env.live`; configs and
   tests use `example.com` placeholders.
+- 2026-11-17 · **Agent takeover is a new escalation step between the deterministic flow and human
+  handoff** (`deterministic → agent → human → failed{reason}`) · a login the deterministic flow
+  cannot finish (stuck form, unrecognised interstitial, verification timeout) was previously lost to
+  a human handoff or a hard failure even when an LLM could have clicked through; the agent gets the
+  SAME live page and tries, and only its failure falls through to a human · wired at the single
+  `recoverDeadEnd` chokepoint in `auth.resolve` (the former `escalate` closure), which both existing
+  dead ends and now the form-error-exhausted / verify-timeout / loop-exhausted paths route through.
+- 2026-11-17 · **The takeover reuses the existing `explore.Explorer{Driver: DriverLLM}` driver
+  rather than a second agent loop** · the crawl driver already owns the observation builder, action
+  schema, the `Executor` that enforces the account-safety deny-list + secret-placeholder
+  substitution (real secrets never enter the model) + untrusted-DATA fencing, loop/step/plateau
+  budgets, audit, and a scriptable mock; `auth` may import `explore` (no cycle) · the takeover adds
+  five tools to that driver — `enter_verification` / `resend_verification` / `solve_captcha` /
+  `check_logged_in` / `request_human` (+ `give_up`) — advertised only when their callback is wired,
+  so the ordinary crawl schema is unchanged; the callbacks delegate to the Authenticator's own
+  `doVerify` / `captchaHook` / `SuccessDetector` / `doHandoff`. A fetched OTP/link is returned to the
+  model only as an outcome label, never as the value · alt: a bespoke takeover agent (would
+  duplicate the deny-list and secret handling — the exact code that must not diverge).
+- 2026-11-17 · **Takeover success is gated ONLY by `check_logged_in` (deterministic success
+  detection); the model saying "done" is never enough** · and a trigger matrix decides agent vs
+  human vs hard-fail: bot-wall / block pages (`IsBlockPage`) and an exhausted captcha chain go
+  STRAIGHT to a human (the agent must never retry into them); `budget_exhausted`, `cancelled`, and a
+  confirmed bad-credentials wall (`isCredentialsRejection`, → new `ErrCredentialsRejected`) are never
+  recovered. CLI `--recovery agent|human|off` (default `agent`, which degrades to human-only when no
+  LLM provider is configured); MCP `get_job` gains a `recovering{step,reason}` state. Nine lab apps +
+  mock-LLM e2e tests prove each solvable scenario completes, the bot-wall goes to a human with zero
+  agent calls, a wrong password fails without the agent, a prompt-injection "delete account" is
+  blocked by the deny-list while the legit login still completes, and no secret reaches the model.

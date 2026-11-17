@@ -27,18 +27,21 @@ type LLMModel interface {
 
 // llmAction is one decision from the model.
 type llmAction struct {
-	Action string `json:"action"`
-	ID     int    `json:"id"`
-	Text   string `json:"text"`
-	Option string `json:"option"`
-	URL    string `json:"url"`
-	Dir    string `json:"dir"`
-	Ms     int    `json:"ms"`
-	Why    string `json:"why"`
-	Reason string `json:"reason"`
+	Action  string `json:"action"`
+	ID      int    `json:"id"`
+	Text    string `json:"text"`
+	Option  string `json:"option"`
+	URL     string `json:"url"`
+	Dir     string `json:"dir"`
+	Ms      int    `json:"ms"`
+	Why     string `json:"why"`
+	Reason  string `json:"reason"`
+	Channel string `json:"channel"` // enter_verification: email|sms|totp
+	Want    string `json:"want"`    // enter_verification: code|link
 }
 
-// actionSchema constrains the model to one action object.
+// actionSchema constrains the model to one action object. This is the base
+// (crawl) action set; takeover mode extends the enum via buildSchema.
 var actionSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -55,6 +58,52 @@ var actionSchema = json.RawMessage(`{
   "required": ["action", "why"],
   "additionalProperties": false
 }`)
+
+// buildSchema returns the action schema for this driver. In takeover mode it
+// extends the base enum with the verification/captcha/success/human actions
+// whose callbacks are wired (only those), so the model is never offered a tool
+// that is not actually available.
+func (e *Explorer) buildSchema() json.RawMessage {
+	if !e.takeoverMode() {
+		return actionSchema
+	}
+	actions := []string{"click", "type", "select", "submit", "navigate", "scroll", "back", "wait", "note", "done"}
+	if e.EnterVerification != nil {
+		actions = append(actions, "enter_verification")
+	}
+	if e.ResendVerification != nil {
+		actions = append(actions, "resend_verification")
+	}
+	if e.SolveCaptcha != nil {
+		actions = append(actions, "solve_captcha")
+	}
+	if e.CheckLoggedIn != nil {
+		actions = append(actions, "check_logged_in")
+	}
+	if e.RequestHuman != nil {
+		actions = append(actions, "request_human")
+	}
+	actions = append(actions, "give_up")
+	enumJSON, _ := json.Marshal(actions)
+	return json.RawMessage(fmt.Sprintf(`{
+  "type": "object",
+  "properties": {
+    "action": {"type": "string", "enum": %s},
+    "id": {"type": "integer", "description": "numeric id of the target element from the OBSERVATION"},
+    "text": {"type": "string", "description": "text to type (type action)"},
+    "option": {"type": "string", "description": "option to choose (select action)"},
+    "url": {"type": "string", "description": "URL to open (navigate action)"},
+    "dir": {"type": "string", "enum": ["up","down"], "description": "scroll direction"},
+    "ms": {"type": "integer", "description": "milliseconds to wait (wait action)"},
+    "channel": {"type": "string", "enum": ["email","sms","totp"], "description": "verification channel (enter_verification)"},
+    "want": {"type": "string", "enum": ["code","link"], "description": "fetch a one-time code or a magic link (enter_verification)"},
+    "why": {"type": "string", "description": "one line reason for this action"},
+    "reason": {"type": "string", "description": "why you are stopping (done / give_up / request_human)"}
+  },
+  "required": ["action", "why"],
+  "additionalProperties": false
+}`, enumJSON))
+}
 
 // llmCrawl is the LLM-driven driver: one model-chosen action per step.
 func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
@@ -251,6 +300,87 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 			return false, "blocked: " + b.Category
 		}
 		return false, e.outcomeFrom(ctx, err, ts, before)
+	case "enter_verification":
+		if e.EnterVerification == nil {
+			ts.Outcome = "unknown_action"
+			return false, "enter_verification is not available"
+		}
+		n := findNode(st, act.ID) // optional hint; the callback re-detects the field
+		if n != nil {
+			ts.TargetID = act.ID
+		}
+		outcome, err := e.EnterVerification(ctx, n, strings.ToLower(act.Channel), strings.EqualFold(act.Want, "link"))
+		if err != nil {
+			ts.Outcome = "verify_error"
+			return false, "verification error: " + err.Error()
+		}
+		ts.Outcome = "entered_verification"
+		// The code/link itself is never surfaced — only the outcome label.
+		return false, "verification: " + outcome
+	case "resend_verification":
+		if e.ResendVerification == nil {
+			ts.Outcome = "unknown_action"
+			return false, "resend_verification is not available"
+		}
+		n := findNode(st, act.ID)
+		if n != nil {
+			ts.TargetID = act.ID
+		}
+		if err := e.ResendVerification(ctx, n); err != nil {
+			ts.Outcome = "resend_error"
+			return false, "resend error: " + err.Error()
+		}
+		ts.Outcome = "resent"
+		return false, "a fresh verification code was requested"
+	case "solve_captcha":
+		if e.SolveCaptcha == nil {
+			ts.Outcome = "unknown_action"
+			return false, "solve_captcha is not available"
+		}
+		outcome, err := e.SolveCaptcha(ctx)
+		if err != nil {
+			ts.Outcome = "captcha_error"
+			return false, "captcha error: " + err.Error()
+		}
+		ts.Outcome = "captcha:" + outcome
+		return false, "captcha: " + outcome
+	case "check_logged_in":
+		if e.CheckLoggedIn == nil {
+			ts.Outcome = "unknown_action"
+			return false, "check_logged_in is not available"
+		}
+		ok, ev := e.CheckLoggedIn(ctx)
+		if ok {
+			rep.StopReason = "logged_in"
+			rep.Notes = append(rep.Notes, "check_logged_in: authenticated ("+strings.Join(ev, ", ")+")")
+			ts.Outcome = "logged_in"
+			return true, "logged in: " + strings.Join(ev, ", ")
+		}
+		ts.Outcome = "not_logged_in"
+		return false, "not logged in yet — keep going"
+	case "request_human":
+		if e.RequestHuman == nil {
+			ts.Outcome = "unknown_action"
+			return false, "request_human is not available"
+		}
+		reason := firstNonEmpty(act.Reason, act.Why)
+		err := e.RequestHuman(ctx, reason)
+		rep.StopReason = "request_human"
+		if reason != "" {
+			rep.Notes = append(rep.Notes, "request_human: "+reason)
+		}
+		ts.Outcome = "request_human"
+		if err != nil {
+			return true, "human handoff error: " + err.Error()
+		}
+		return true, "escalated to a human"
+	case "give_up":
+		rep.StopReason = "give_up"
+		if r := firstNonEmpty(act.Reason, act.Why); r != "" {
+			rep.Notes = append(rep.Notes, "give_up: "+r)
+		}
+		ts.Outcome = "give_up"
+		return true, "gave up"
 	default:
 		ts.Outcome = "unknown_action"
 		return false, "unknown action"
@@ -295,7 +425,7 @@ func (e *Explorer) decide(ctx context.Context, obs string) (llmAction, *model.Us
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	raw, usage, err := e.Model.Structured(cctx, msgs, actionSchema, model.ChatOpts{MaxTokens: 1024})
+	raw, usage, err := e.Model.Structured(cctx, msgs, e.buildSchema(), model.ChatOpts{MaxTokens: 1024})
 	if err != nil {
 		e.crawlDebug("model error: %v", err)
 		return llmAction{Action: "note", Why: "model error: " + err.Error()}, usage
@@ -338,15 +468,21 @@ func parseAction(raw []byte) (llmAction, bool) {
 		m = inner
 	}
 	a := llmAction{
-		Action: jstr(m["action"]),
-		Text:   jstr(m["text"]),
-		Option: jstr(m["option"]),
-		URL:    jstr(m["url"]),
-		Dir:    jstr(m["dir"]),
-		Why:    jstr(m["why"]),
-		Reason: jstr(m["reason"]),
-		ID:     jint(m["id"]),
-		Ms:     jint(m["ms"]),
+		Action:  jstr(m["action"]),
+		Text:    jstr(m["text"]),
+		Option:  jstr(m["option"]),
+		URL:     jstr(m["url"]),
+		Dir:     jstr(m["dir"]),
+		Why:     jstr(m["why"]),
+		Reason:  jstr(m["reason"]),
+		Channel: jstr(m["channel"]),
+		Want:    jstr(m["want"]),
+		ID:      jint(m["id"]),
+		Ms:      jint(m["ms"]),
+	}
+	// Some models pass the target field as "element" rather than "id".
+	if a.ID == 0 {
+		a.ID = jint(m["element"])
 	}
 	return a, a.Action != ""
 }

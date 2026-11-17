@@ -2,6 +2,32 @@
 
 > Single source of truth for resuming. On restart: read this file and `DECISIONS.md` first.
 
+## Agent takeover (recovery): **core complete** — deterministic → agent → human → failed{reason}
+- [x] **Five takeover tools on the shared LLM driver** (`internal/explore`) — `enter_verification`,
+  `resend_verification`, `solve_captcha`, `check_logged_in`, `request_human` (+ `give_up`), gated so
+  they appear in the action schema only when their callback is wired (ordinary crawl schema
+  unchanged; `TestBuildSchemaGating`). Reuses the Executor's deny-list, secret substitution and
+  untrusted-DATA fencing as-is.
+- [x] **Escalation chokepoint** (`internal/auth`) — `recoverDeadEnd` (was `escalate`) with a trigger
+  matrix: agent for stuck / unknown-flow / verify-timeout; straight to human for bot-wall
+  (`IsBlockPage`) and captcha-exhausted; never-recover for `budget_exhausted` / `cancelled` /
+  bad-credentials (`isCredentialsRejection` → `ErrCredentialsRejected`). `takeover.go` drives
+  `explore.Explorer{DriverLLM}` and wires the tools to `doVerify` / `captchaHook` / `SuccessDetector`
+  / `doHandoff`. **Success gated only by `check_logged_in`.** Agent run folded into
+  `Trace.AgentTakeover`; `--recovery agent|human|off` (default agent, degrades to human-only without
+  an LLM); `VerifyTimeout` is configurable.
+- [x] **Wiring** — `app.App.Recovery`/`AgentModel`; `RunAuth` picks the plan model for the agent;
+  CLI `auth --recovery`; MCP `Job.Recovering{step,reason}` via an optional `RecoveryReporter` asker.
+- [x] **Lab apps + tests** — `internal/lab/apps_takeover.go`: trust-device, terms-modal,
+  prompt-injection interstitials, resend-required OTP, bot-wall. e2e (`e2e/takeover_e2e_test.go`,
+  mock LLM): each solvable scenario completes, injection "delete account" is deny-list-blocked while
+  the legit login still finishes, bot-wall → human with **zero** agent calls, wrong password →
+  `credentials_rejected` with no agent, and no secret reaches the model. Unit: trigger matrix, block
+  page, recovery-mode parse, schema gating.
+- [~] **Deferred (Phase 5)** — per-host flow-recipe learning: on takeover success, save the action
+  sequence (element descriptors, not raw ids) and replay it deterministically before the normal flow
+  next time, dropping it on mismatch. Not yet built.
+
 ## LLM-driven crawl (driver: bfs | llm | hybrid)
 - [x] **Shared `explore.Executor`** — the enforcement point for every driver: account-safety
   deny-list before click/submit/navigate (normalised separators so `/x/delete-account` is caught),

@@ -12,6 +12,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/browser"
 	"github.com/creativetoken/chromancer/internal/captcha"
 	"github.com/creativetoken/chromancer/internal/core"
+	"github.com/creativetoken/chromancer/internal/explore"
 	"github.com/creativetoken/chromancer/internal/handback"
 	"github.com/creativetoken/chromancer/internal/identity"
 	"github.com/creativetoken/chromancer/internal/model"
@@ -41,6 +42,20 @@ type Authenticator struct {
 	Handoff    *captcha.HumanHandoff // optional; escalation for any dead end
 	MaxSteps   int                   // post-submit resolution attempts (default 6)
 	Timeout    time.Duration
+	// VerifyTimeout bounds how long doVerify waits for a code/link before giving
+	// up (and, with recovery, handing off to the agent). Default 90s.
+	VerifyTimeout time.Duration
+
+	// Agent, when set with Recovery != RecoveryOff, enables the LLM agent
+	// takeover step: a dead end the deterministic flow cannot pass is handed to
+	// the agent (same live page, reusing the existing verifier/captcha/success/
+	// handoff tools) before falling back to a human.
+	Agent    explore.LLMModel
+	Recovery RecoveryMode
+	// OnRecovering, if set, is called when the agent takes over (step 0) and on
+	// each subsequent agent step, so a control surface can expose a
+	// recovering{step,reason} state. Optional.
+	OnRecovering func(step int, reason string)
 
 	trace          handback.Trace
 	base           Baseline
@@ -213,20 +228,48 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 	formErrRetries := 0
 	verified := false
 	handoffUsed := false
+	agentUsed := false
 	actedHash := map[perceive.StateHash]int{}
-	// escalate hands a dead end (stuck / unknown flow) to a human when one is
-	// configured, once; otherwise it returns the sentinel error.
-	escalate := func(reason captcha.BlockReason, sentinel error) error {
-		if a.Handoff != nil && !handoffUsed {
+	// recover hands a dead end (stuck / unknown flow / verify timeout) to the LLM
+	// agent first (when one is configured and the trigger is eligible), then to a
+	// human, then returns the sentinel error. A hard credentials rejection is
+	// never recovered. On a successful recovery it clears actedHash so the form
+	// gets a fresh chance and returns nil.
+	recoverDeadEnd := func(reason captcha.BlockReason, alertText string, sentinel error) error {
+		if ctx.Err() != nil {
+			return sentinel
+		}
+		// Never recover from a confirmed bad-credentials wall.
+		if isCredentialsRejection(alertText) {
+			return fmt.Errorf("%w", ErrCredentialsRejected)
+		}
+		triedAgent := false
+		if a.Recovery != RecoveryOff && a.Agent != nil && !agentUsed && agentEligible(reason) {
+			agentUsed = true
+			triedAgent = true
+			ok, err := a.runAgent(ctx, p, rec, deps, mode, string(reason), &since)
+			if err != nil {
+				a.log("agent_takeover", map[string]any{"reason": string(reason), "result": "error", "error": err.Error()})
+			}
+			if ok {
+				for k := range actedHash {
+					delete(actedHash, k)
+				}
+				return nil
+			}
+		}
+		if a.Recovery != RecoveryOff && a.Handoff != nil && !handoffUsed {
 			handoffUsed = true
 			if err := a.doHandoff(ctx, reason); err != nil {
 				return err
 			}
-			// The human intervened; give the form a fresh chance to progress.
 			for k := range actedHash {
 				delete(actedHash, k)
 			}
 			return nil
+		}
+		if triedAgent {
+			return fmt.Errorf("%w", ErrAgentTakeoverFailed)
 		}
 		return sentinel
 	}
@@ -243,6 +286,14 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 				return fmt.Errorf("%w: verification required (%s) but no provider configured", ErrFlowFailed, vs.Channel)
 			}
 			if err := a.doVerify(ctx, p, deps, vs, &since); err != nil {
+				// A verification that never arrived is a recovery trigger — the
+				// agent can resend or try another channel.
+				if errors.Is(err, ErrVerifyTimeout) {
+					if rerr := recoverDeadEnd(captcha.ReasonVerifyTimeout, "", fmt.Errorf("%w: verification timed out", ErrStuck)); rerr != nil {
+						return rerr
+					}
+					continue
+				}
 				return err
 			}
 			verified = true
@@ -276,10 +327,15 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 				limit = 5
 			}
 			if f.HasAlert && !hasCaptcha && formErrRetries >= 2 {
-				return fmt.Errorf("%w: form error: %s", ErrFlowFailed, f.AlertText)
+				// Form-error retries exhausted: a bad-credentials wall fails hard,
+				// anything else is a recovery trigger (agent → human).
+				if err := recoverDeadEnd(captcha.ReasonStuck, f.AlertText, fmt.Errorf("%w: form error: %s", ErrFlowFailed, f.AlertText)); err != nil {
+					return err
+				}
+				continue
 			}
 			if actedHash[hash] >= limit {
-				if err := escalate(captcha.ReasonStuck, fmt.Errorf("%w: form did not progress", ErrStuck)); err != nil {
+				if err := recoverDeadEnd(captcha.ReasonStuck, f.AlertText, fmt.Errorf("%w: form did not progress", ErrStuck)); err != nil {
 					return err
 				}
 				continue
@@ -314,11 +370,27 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 		case IsSSOOnly(st):
 			return fmt.Errorf("%w", ErrSSOOnly)
 		default:
-			// Unrecognised page with no actionable form → escalate to a human.
-			if err := escalate(captcha.ReasonUnknownFlow, fmt.Errorf("%w: unexpected page with no actionable form", ErrUnknownFlow)); err != nil {
+			// Unrecognised page with no actionable form. A bot-wall / block page
+			// goes straight to a human (the agent must never retry into it);
+			// anything else is an agent-eligible unknown flow.
+			reason := captcha.ReasonUnknownFlow
+			if IsBlockPage(st) {
+				reason = captcha.ReasonBlockPage
+			}
+			if err := recoverDeadEnd(reason, "", fmt.Errorf("%w: unexpected page with no actionable form", ErrUnknownFlow)); err != nil {
 				return err
 			}
 		}
+	}
+	// Loop exhausted: submit happened but success never fired. Try one recovery,
+	// then require a confirmed success before declaring the login done.
+	if err := recoverDeadEnd(captcha.ReasonStuck, "", fmt.Errorf("%w: did not authenticate after %d steps", ErrStuck, maxSteps)); err != nil {
+		return err
+	}
+	if ok, ev := a.confirmAuthenticated(ctx, p, rec); ok {
+		a.trace.SuccessEvidence = ev
+		a.trace.Add("authenticated after recovery: %s", strings.Join(ev, ", "))
+		return nil
 	}
 	return fmt.Errorf("%w: did not authenticate after %d steps", ErrStuck, maxSteps)
 }
@@ -438,7 +510,11 @@ func (a *Authenticator) doHandoff(ctx context.Context, reason captcha.BlockReaso
 
 // doVerify fetches a code/link and applies it to the page.
 func (a *Authenticator) doVerify(ctx context.Context, p *browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time) error {
-	deadline := time.Now().Add(90 * time.Second)
+	vd := a.VerifyTimeout
+	if vd <= 0 {
+		vd = 90 * time.Second
+	}
+	deadline := time.Now().Add(vd)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}
@@ -448,6 +524,9 @@ func (a *Authenticator) doVerify(ctx context.Context, p *browser.Page, deps Flow
 	defer cancel()
 	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: deadline})
 	if err != nil {
+		if errors.Is(err, verify.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %v", ErrVerifyTimeout, err)
+		}
 		return fmt.Errorf("%w: verification: %v", ErrFlowFailed, err)
 	}
 	*since = time.Now()
@@ -606,6 +685,12 @@ func FailReason(err error) string {
 		return "not_authenticated"
 	case errors.Is(err, ErrStuck):
 		return "stuck"
+	case errors.Is(err, ErrCredentialsRejected):
+		return "credentials_rejected"
+	case errors.Is(err, ErrAgentTakeoverFailed):
+		return "agent_takeover_failed"
+	case errors.Is(err, ErrVerifyTimeout):
+		return "verify_timeout"
 	case errors.Is(err, ErrHandoffTimeout):
 		return "handoff_timeout"
 	case errors.Is(err, core.ErrBudgetExhausted):

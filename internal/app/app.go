@@ -35,6 +35,14 @@ type Asker interface {
 	captcha.Asker
 }
 
+// RecoveryReporter is an optional capability of an Asker: when the LLM agent
+// takes over a dead end, progress is reported here so a control surface can
+// expose a recovering{step,reason} state. Askers that do not implement it simply
+// do not receive the notifications.
+type RecoveryReporter interface {
+	Recovering(step int, reason string)
+}
+
 // App holds process-wide dependencies.
 type App struct {
 	Cfg    config.Config
@@ -47,6 +55,14 @@ type App struct {
 	// AuthModel, when set, overrides the router for the auth flow (entrypoint LLM
 	// fallback, classification). Used by tests to script entry discovery.
 	AuthModel model.LLMProvider
+	// Recovery selects what happens when the deterministic flow hits a dead end:
+	// RecoveryAgent (default) tries the LLM agent (when a model is configured)
+	// then a human; RecoveryHuman skips the agent; RecoveryOff fails fast. The
+	// default degrades to human-only when no LLM provider is available.
+	Recovery auth.RecoveryMode
+	// AgentModel, when set, overrides the model handed to the agent takeover.
+	// Used by tests to script the takeover's action sequence.
+	AgentModel explore.LLMModel
 }
 
 // New builds an App from config, reading the store key from the environment.
@@ -137,6 +153,21 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	if a.AuthModel != nil {
 		authRouter = &model.StaticRouter{Default: a.AuthModel}
 	}
+	// Agent takeover model: an explicit override, else the planning model from
+	// the router. When neither exists, the agent is nil and recovery degrades to
+	// human-only.
+	var agentModel explore.LLMModel
+	if a.Recovery != auth.RecoveryOff {
+		switch {
+		case a.AgentModel != nil:
+			agentModel = a.AgentModel
+		case authRouter != nil && authRouter.For(model.TaskPlan) != nil:
+			agentModel = authRouter.For(model.TaskPlan)
+		}
+	}
+	if a.Recovery == auth.RecoveryOff {
+		handoff = nil
+	}
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,
 		Perceiver: perceive.New(), Router: authRouter,
@@ -147,9 +178,14 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 		Verifier:   a.verifier(account, creds, asker),
 		Captcha:    resolver,
 		Handoff:    handoff,
+		Agent:      agentModel,
+		Recovery:   a.Recovery,
 		Capture:    handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
 		EntryCache: ws.CacheDir,
 		Timeout:    8 * time.Second,
+	}
+	if rr, ok := asker.(RecoveryReporter); ok && rr != nil {
+		authr.OnRecovering = rr.Recovering
 	}
 	res, err := authr.Run(bctx, b, mode, hints)
 	if err != nil {

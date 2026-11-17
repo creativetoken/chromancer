@@ -38,6 +38,14 @@ type Pending struct {
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`
 }
 
+// Recovering reports that the LLM agent is driving the live page to finish a
+// flow the deterministic automation could not. Surfaced on get_job while the
+// agent is in control.
+type Recovering struct {
+	Step   int    `json:"step"`
+	Reason string `json:"reason"`
+}
+
 // Answer is the response to a Pending challenge.
 type Answer struct {
 	Code     string `json:"code,omitempty"`
@@ -54,6 +62,7 @@ type Job struct {
 	Kind       string           `json:"kind"` // auth | crawl
 	State      JobState         `json:"state"`
 	Pending    *Pending         `json:"pending,omitempty"`
+	Recovering *Recovering      `json:"recovering,omitempty"`
 	Result     *handback.Result `json:"result,omitempty"`
 	Crawl      *app.CrawlResult `json:"crawl,omitempty"`
 	Reason     string           `json:"reason,omitempty"`

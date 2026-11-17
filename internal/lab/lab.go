@@ -362,6 +362,7 @@ func allApps() []App {
 		&interstitialApp{name: "takeover-injection", cookie: "tki_sid", variant: "injection"},
 		&resendOTPApp{name: "takeover-resend", cookie: "tkr_sid"},
 		&botWallApp{name: "takeover-botwall", cookie: "tkb_sid"},
+		&hydrationLoginApp{cookie: "hyd_sid"},
 		&stuckLoginApp{},
 		&crawlApp{},
 		&menuSignupApp{},

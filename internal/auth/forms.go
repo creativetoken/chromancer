@@ -251,6 +251,32 @@ func (a actor) click(ctx context.Context, n *perceive.Node, label string) error 
 	return nil
 }
 
+// clickSubmit clicks a submit control after gating on readiness: the control
+// must be enabled, box-stable, and hit-testable before the click, so a click
+// never lands on a pre-hydration skeleton button whose handler is not yet
+// attached. A control that never settles (or whose handle is stale) returns an
+// error, which submitWithRetry turns into a settle + re-perceive + retry.
+func (a actor) clickSubmit(ctx context.Context, n *perceive.Node) error {
+	cctx, cancel := a.bound(ctx)
+	defer cancel()
+	fr, err := perceive.FrameOf(cctx, a.d.Page, *n)
+	if err != nil {
+		return err
+	}
+	el, err := a.d.Page.Element(cctx, fr, perceive.Selector(n.Handle), a.d.Timeout)
+	if err != nil {
+		return err
+	}
+	if err := a.d.Page.WaitElementReady(cctx, el, 250*time.Millisecond); err != nil {
+		return err
+	}
+	if err := a.d.Page.Click(cctx, el); err != nil {
+		return err
+	}
+	a.d.Log("action", map[string]any{"kind": "click", "handle": n.Handle, "label": "submit", "frame": n.Frame})
+	return nil
+}
+
 // submitAfterCaptcha runs the pre-submit CAPTCHA hook and then submits. The
 // hook can mutate the DOM — a human solving a challenge in the browser, or a
 // token callback re-rendering or auto-submitting the form — which invalidates
@@ -278,12 +304,74 @@ func (a actor) submitAfterCaptcha(ctx context.Context, f Fields, fallback *perce
 			}
 		}
 	}
-	return a.submit(ctx, f, fallback)
+	return a.submitWithRetry(ctx, f, fallback)
+}
+
+// submitWithRetry submits and, if the click is stranded (a slow SPA can present
+// a skeleton submit button before hydration attaches its handler, so the click
+// lands on a stale/not-yet-interactive element and times out), waits for the DOM
+// to settle, re-perceives a fresh live submit control, and retries. This
+// generalises the post-captcha re-perceive to any re-render that strands submit
+// — hydration, a token callback, a late modal — not just a CAPTCHA solve.
+func (a actor) submitWithRetry(ctx context.Context, f Fields, fallback *perceive.Node) error {
+	const attempts = 2
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			a.d.Trace("submit: click stranded, settling + re-perceiving (attempt %d): %v", i+1, lastErr)
+			_ = a.d.Page.WaitStable(ctx, browser.DefaultStableTimeout)
+			if a.d.Perceiver != nil {
+				if st, _, perr := a.d.Perceiver.Perceive(ctx, a.d.Page); perr == nil {
+					f2 := Classify(st)
+					// The form may have advanced already (the earlier click landed
+					// after all, or the page navigated) → nothing more to click.
+					if f2.Submit == nil && f2.Password == nil && f2.Identifier == nil {
+						a.d.Trace("submit: form advanced; nothing to re-click")
+						return nil
+					}
+					f = f2
+					switch {
+					case f2.Password != nil:
+						fallback = f2.Password
+					case f2.Identifier != nil:
+						fallback = f2.Identifier
+					}
+				}
+			}
+		}
+		lastErr = a.submit(ctx, f, fallback)
+		if lastErr == nil || !isStrandedClick(lastErr) || ctx.Err() != nil {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
+// isStrandedClick reports whether a submit error is the kind a re-perceive +
+// retry can recover: the submit control was not actionable in time (a skeleton
+// still hydrating) or the handle went stale under a re-render.
+func isStrandedClick(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, sub := range []string{
+		"deadline exceeded", "wait enabled", "wait stable", "wait interactable",
+		"browser: element", "not found", "detached", "stale", "cannot find",
+	} {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a actor) submit(ctx context.Context, f Fields, fallback *perceive.Node) error {
 	if f.Submit != nil {
-		return a.click(ctx, f.Submit, "submit")
+		return a.clickSubmit(ctx, f.Submit)
 	}
 	if fallback == nil {
 		return fmt.Errorf("%w: no submit control", ErrFlowFailed)

@@ -30,7 +30,7 @@ type Anthropic struct {
 type AnthropicOptions struct {
 	BaseURL  string // default https://api.anthropic.com or $ANTHROPIC_BASE_URL
 	APIKey   string // default $ANTHROPIC_API_KEY
-	Model    string // default $ANTHROPIC_MODEL or claude-3-5-sonnet-latest
+	Model    string // default $ANTHROPIC_MODEL or claude-sonnet-5-5
 	Vision   bool
 	PriceIn  float64
 	PriceOut float64
@@ -41,7 +41,7 @@ type AnthropicOptions struct {
 func NewAnthropic(o AnthropicOptions) *Anthropic {
 	base := firstNonEmpty(o.BaseURL, os.Getenv("ANTHROPIC_BASE_URL"), "https://api.anthropic.com")
 	key := firstNonEmpty(o.APIKey, os.Getenv("ANTHROPIC_API_KEY"))
-	m := firstNonEmpty(o.Model, os.Getenv("ANTHROPIC_MODEL"), "claude-3-5-sonnet-latest")
+	m := firstNonEmpty(o.Model, os.Getenv("ANTHROPIC_MODEL"), "claude-sonnet-5-5")
 	to := o.Timeout
 	if to == 0 {
 		to = 90 * time.Second

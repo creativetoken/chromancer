@@ -34,8 +34,8 @@ type Node struct {
 	ID           string `json:"id,omitempty"`
 	NameAttr     string `json:"name_attr,omitempty"`
 	Autocomplete string `json:"autocomplete,omitempty"`
-	InputMode    string `json:"inputmode,omitempty"`  // inputmode attr, lowercased (e.g. "numeric")
-	MaxLength    int    `json:"maxlength,omitempty"`  // maxlength attr when 1..64, else 0
+	InputMode    string `json:"inputmode,omitempty"` // inputmode attr, lowercased (e.g. "numeric")
+	MaxLength    int    `json:"maxlength,omitempty"` // maxlength attr when 1..64, else 0
 	Disabled     bool   `json:"disabled,omitempty"`
 	Visible      bool   `json:"visible"`
 	Text         string `json:"text,omitempty"` // for buttons/links: visible text

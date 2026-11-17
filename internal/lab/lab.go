@@ -355,6 +355,8 @@ func allApps() []App {
 		&captchaMockApp{},
 		&captchaBlockApp{},
 		&captchaRerenderApp{},
+		&combinedVerifyApp{name: "combined-verify", cookie: "cv_sid"},
+		&combinedVerifyApp{name: "combined-verify-intl", cookie: "cvi_sid", intl: true},
 		&stuckLoginApp{},
 		&crawlApp{},
 		&menuSignupApp{},

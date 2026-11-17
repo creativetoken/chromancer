@@ -201,3 +201,28 @@
   loop detect success/verification. Lab app `captcha-rerender` reproduces it (polls solve status and
   swaps the submit button on solve); its e2e fails on the stale handle without the fix and logs in
   with it.
+- 2026-11-17 · **Verification code steps are detected even when email/password stay on the form,
+  language-independently** · some sites (Bambu Lab's `/sign-in`) keep the email and password inputs
+  visible and reveal a one-time-code field in the *same* form for step-up verification; the live
+  login filled credentials, submitted, then looped re-submitting the login form until `stuck: form
+  did not progress`, because `DetectVerifyStep` only treated a page as a verify step when the
+  password field was gone, and its code-copy trigger was English-only · the detector now scores a
+  code field from structural, language-neutral signals — `autocomplete=one-time-code`,
+  `inputmode=numeric`, a numeric/tel type, a short `maxlength` (4–8), and a position below the
+  credential fields — picks the strongest candidate that is neither the identifier nor the password,
+  and fires when that score is strong (`otpStrong`) OR on-page copy asks for a code; it also prefers
+  a Confirm/Verify-style button over a lingering "Log in" for submitting the code. `perceive.Node`
+  gained `InputMode`/`MaxLength` (type=password is excluded from code candidates so a "confirm
+  password" signup field is never mistaken for one). Lab apps `combined-verify` (English copy) and
+  `combined-verify-intl` (non-English labels, code field detectable only from inputmode+maxlength)
+  reproduce it end-to-end; both log in via the emailed code. Verified live against bambulab.com.
+- 2026-11-17 · **Relay/sub-address aliases: canonicalise to resolve the inbox, exact-match to claim
+  the code** · an OTP delivered to a `user+N@relay.example` address that forwards into a Gmail inbox
+  must be fetchable, while two accounts sharing one relay base (`+1` vs `+5`) must never read each
+  other's codes · mailbox *resolution* (`MailboxForAddress`) already canonicalises the `+N` tag, so
+  listing one relay alias in a mailbox's `address_envs` (new `GMAIL_ALIAS_3` slot in the example
+  resources) matches every `+N` on that base; per-account message *matching* (`parsedMsg.toAlias`)
+  keeps using the full address including `+N`, so interleaved OTPs stay separated. Guarded by
+  `TestIMAPSubAddressSeparation` (two `+N` accounts, interleaved mail, each gets only its own newest
+  code). Real relay/inbox addresses live only in the operator's git-ignored `.env.live`; configs and
+  tests use `example.com` placeholders.

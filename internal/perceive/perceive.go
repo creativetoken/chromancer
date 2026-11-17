@@ -34,6 +34,8 @@ type Node struct {
 	ID           string `json:"id,omitempty"`
 	NameAttr     string `json:"name_attr,omitempty"`
 	Autocomplete string `json:"autocomplete,omitempty"`
+	InputMode    string `json:"inputmode,omitempty"`  // inputmode attr, lowercased (e.g. "numeric")
+	MaxLength    int    `json:"maxlength,omitempty"`  // maxlength attr when 1..64, else 0
 	Disabled     bool   `json:"disabled,omitempty"`
 	Visible      bool   `json:"visible"`
 	Text         string `json:"text,omitempty"` // for buttons/links: visible text
@@ -281,6 +283,8 @@ const walkJS = `(base, frameIndex) => {
       id: el.id || '',
       name_attr: el.getAttribute('name') || '',
       autocomplete: el.getAttribute('autocomplete') || '',
+      inputmode: (el.getAttribute('inputmode') || '').toLowerCase(),
+      maxlength: (function(){ const m = parseInt(el.getAttribute('maxlength'), 10); return (m > 0 && m <= 64) ? m : 0; })(),
       disabled: !!el.disabled,
       visible: vis,
       text: (tag === 'a' || tag === 'button' || el.getAttribute('role') === 'button') ? txt(el).slice(0, 120) : ''

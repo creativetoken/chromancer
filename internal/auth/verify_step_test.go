@@ -63,6 +63,68 @@ func TestDetectVerifyStep(t *testing.T) {
 	}
 }
 
+// TestDetectVerifyStepCombinedForm covers forms that keep email + password
+// visible alongside a revealed one-time-code field (Bambu Lab's sign-in), and
+// that the code step is detected from structural signals without English copy.
+func TestDetectVerifyStepCombinedForm(t *testing.T) {
+	// Bambu-style: account + password + "Verification code" + Log In / Confirm.
+	bambu := perceive.State{Title: "Sign in",
+		Text: "Verification Code To keep your account secure, please enter the verification code we sent.",
+		Nodes: []perceive.Node{
+			{Handle: 1, Tag: "input", Type: "text", Name: "Email Address", Placeholder: "Email Address*", Visible: true},
+			{Handle: 2, Tag: "input", Type: "password", Name: "Password", Placeholder: "Password*", Visible: true},
+			{Handle: 3, Tag: "input", Type: "text", Name: "code", NameAttr: "code", Placeholder: "Verification code*", MaxLength: 6, Visible: true},
+			{Handle: 4, Tag: "button", Type: "submit", Text: "Log In", Visible: true},
+			{Handle: 5, Tag: "button", Type: "submit", Text: "Confirm", Visible: true},
+		}}
+	vs := DetectVerifyStep(bambu)
+	if !vs.Needed || vs.CodeField == nil || vs.CodeField.Handle != 3 {
+		t.Fatalf("combined form: want code field handle 3, got %+v", vs)
+	}
+	if vs.Submit == nil || vs.Submit.Handle != 5 {
+		t.Fatalf("combined form: want Confirm (handle 5) as submit, got %+v", vs.Submit)
+	}
+
+	// Language-independent: non-English labels, no recognizable copy, detected via
+	// autocomplete=one-time-code on a field below the credentials.
+	jp := perceive.State{Title: "ログイン", Text: "サインインを続けるには確認コードを入力してください",
+		Nodes: []perceive.Node{
+			{Handle: 1, Tag: "input", Type: "text", Name: "メールアドレス", Placeholder: "メールアドレス", Visible: true},
+			{Handle: 2, Tag: "input", Type: "password", Name: "パスワード", Visible: true},
+			{Handle: 3, Tag: "input", Type: "text", Name: "確認コード", Autocomplete: "one-time-code", Visible: true},
+			{Handle: 4, Tag: "button", Type: "submit", Text: "確認", Visible: true},
+		}}
+	if vs := DetectVerifyStep(jp); !vs.Needed || vs.CodeField == nil || vs.CodeField.Handle != 3 {
+		t.Fatalf("non-English (autocomplete) combined form: %+v", vs)
+	}
+
+	// Language-independent: no autocomplete, detected via numeric inputmode + a
+	// short maxlength on a field below the credentials, with no code copy.
+	de := perceive.State{Title: "Anmelden", Text: "Bitte geben Sie den Bestätigungscode ein, um fortzufahren.",
+		Nodes: []perceive.Node{
+			{Handle: 1, Tag: "input", Type: "text", Name: "E-Mail-Adresse", Placeholder: "E-Mail", Visible: true},
+			{Handle: 2, Tag: "input", Type: "password", Name: "Passwort", Visible: true},
+			{Handle: 3, Tag: "input", Type: "text", Name: "Bestätigungscode", InputMode: "numeric", MaxLength: 6, Visible: true},
+			{Handle: 4, Tag: "button", Type: "submit", Text: "Weiter", Visible: true},
+		}}
+	if vs := DetectVerifyStep(de); !vs.Needed || vs.CodeField == nil || vs.CodeField.Handle != 3 {
+		t.Fatalf("non-English (inputmode+maxlength) combined form: %+v", vs)
+	}
+
+	// Regression guard: a signup with a "confirm password" field and
+	// "confirm your account" copy must NOT be mistaken for a code step.
+	signup := perceive.State{Title: "Sign up", Text: "Create your account. Confirm your account details below.",
+		Nodes: []perceive.Node{
+			{Handle: 1, Tag: "input", Type: "text", Name: "Email", Placeholder: "Email", Visible: true},
+			{Handle: 2, Tag: "input", Type: "password", Name: "Password", Autocomplete: "new-password", Visible: true},
+			{Handle: 3, Tag: "input", Type: "password", Name: "confirm_password", NameAttr: "confirm_password", Autocomplete: "new-password", Visible: true},
+			{Handle: 4, Tag: "button", Type: "submit", Text: "Sign up", Visible: true},
+		}}
+	if DetectVerifyStep(signup).Needed {
+		t.Fatal("signup with a confirm-password field should not be a verify step")
+	}
+}
+
 func TestIsAccountExists(t *testing.T) {
 	yes := perceive.State{Text: "An account with that email already exists. Try logging in."}
 	if !IsAccountExists(yes) {

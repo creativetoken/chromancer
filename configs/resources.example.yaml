@@ -24,6 +24,12 @@ resources:
       address_envs:                 # the alias addresses that land in this mailbox
         - GMAIL_ALIAS_1
         - GMAIL_ALIAS_2
+        # Relay/forwarding aliases that land in this mailbox (e.g. an address of
+        # the form user+N@relay.example that forwards into GMAIL_USER's inbox)
+        # also belong here, referenced by env var. Sub-addressing is
+        # canonicalised, so listing one "+N" alias matches every "+N" that
+        # shares the same base.
+        - GMAIL_ALIAS_3
 
 providers:
   twilio:

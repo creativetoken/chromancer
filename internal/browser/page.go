@@ -147,6 +147,30 @@ func (p *Page) Element(ctx context.Context, frame *rod.Page, selector string, ti
 	return el, nil
 }
 
+// WaitElementReady waits for an element to become genuinely actionable —
+// enabled, its box stable (not mid-animation or mid-hydration), and hit-testable
+// — bounded by the element's context. DOM-mutation quiet alone (WaitStable) is a
+// weak proxy for "this SPA is interactive": a slow client-rendered page exposes a
+// skeleton control during a pre-hydration lull, so a click can land before the
+// handler is attached. Gating the click on real readiness closes that race; a
+// detached/never-settling element returns an error so the caller can re-perceive
+// a fresh handle.
+func (p *Page) WaitElementReady(ctx context.Context, el *rod.Element, stableFor time.Duration) error {
+	el = el.Context(ctx)
+	if err := el.WaitEnabled(); err != nil {
+		return fmt.Errorf("browser: wait enabled: %w", err)
+	}
+	if stableFor > 0 {
+		if err := el.WaitStable(stableFor); err != nil {
+			return fmt.Errorf("browser: wait stable: %w", err)
+		}
+	}
+	if _, err := el.WaitInteractable(); err != nil {
+		return fmt.Errorf("browser: wait interactable: %w", err)
+	}
+	return nil
+}
+
 // Click clicks an element.
 func (p *Page) Click(ctx context.Context, el *rod.Element) error {
 	el = el.Context(ctx)

@@ -210,7 +210,16 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 	a.trace.FlowVariant = handler.Variant()
 	a.log("flow", map[string]any{"variant": handler.Variant(), "mode": mode.String()})
 	if err := handler.Run(ctx, st, a.Creds, deps); err != nil {
-		return err
+		// A submit the deterministic flow could not land — a slow SPA whose submit
+		// control never settled, or a handle gone stale under hydration — is not a
+		// hard failure: the credentials are already filled, so fall through to the
+		// resolve loop, which re-perceives, retries the submit, and escalates to
+		// the agent/human if it is still stranded. A non-submit error still aborts.
+		if !isStrandedClick(err) {
+			return err
+		}
+		a.trace.Add("initial submit stranded (%v) → resolve loop", err)
+		a.log("flow", map[string]any{"submit_stranded": err.Error()})
 	}
 	return a.resolve(ctx, p, rec, deps, mode, since)
 }
@@ -355,7 +364,13 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 				a.trace.Add("post-verify login")
 			}
 			if err := h.Run(ctx, st, a.Creds, deps); err != nil {
-				return err
+				// A stranded submit (slow SPA / hydration) is not fatal here: the
+				// state hash was already counted, so a repeat reaches the escalation
+				// above (agent → human). Any other handler error still aborts.
+				if !isStrandedClick(err) {
+					return err
+				}
+				a.trace.Add("submit stranded in resolve (%v)", err)
 			}
 		case verified || (mode == Signup):
 			// Verified a signup but no form here (e.g. "please log in") → go to login.

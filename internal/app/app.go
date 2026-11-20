@@ -14,6 +14,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/audit"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/browser"
+	_ "github.com/creativetoken/chromancer/internal/browser/camoufox"   // register "camoufox" backend
 	_ "github.com/creativetoken/chromancer/internal/browser/rodbackend" // register "chromium" backend
 	"github.com/creativetoken/chromancer/internal/captcha"
 	"github.com/creativetoken/chromancer/internal/captcha/plugin"

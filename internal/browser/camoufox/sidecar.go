@@ -35,6 +35,7 @@ type ready struct {
 	WS                string `json:"ws"`
 	Display           string `json:"display"`
 	PlaywrightVersion string `json:"playwright_version"`
+	CamoufoxVersion   string `json:"camoufox_version"`
 	Error             string `json:"error,omitempty"`
 }
 
@@ -43,6 +44,7 @@ type Sidecar struct {
 	WS                string
 	Display           string
 	PlaywrightVersion string
+	CamoufoxVersion   string
 
 	cmd     *exec.Cmd
 	script  string // temp path of the embedded python script
@@ -143,7 +145,7 @@ func StartSidecar(ctx context.Context, o SidecarOptions) (*Sidecar, error) {
 			s.Close()
 			return nil, r.err
 		}
-		s.WS, s.Display, s.PlaywrightVersion = r.rd.WS, r.rd.Display, r.rd.PlaywrightVersion
+		s.WS, s.Display, s.PlaywrightVersion, s.CamoufoxVersion = r.rd.WS, r.rd.Display, r.rd.PlaywrightVersion, r.rd.CamoufoxVersion
 	}
 
 	if err := CheckPlaywrightVersion(s.PlaywrightVersion); err != nil {

@@ -58,6 +58,7 @@ type Authenticator struct {
 	OnRecovering func(step int, reason string)
 
 	trace          handback.Trace
+	backend        browser.Capabilities // the engine this run used (recorded in trace + bundle)
 	base           Baseline
 	pendingSolve   string
 	pendingPayload string // token/text of the pending solve (for the reached-backend check)
@@ -82,6 +83,9 @@ func (a *Authenticator) Run(ctx context.Context, b browser.Browser, mode Mode, h
 		a.Capture = handback.CaptureWindow{N: 20, T: 10 * time.Second}
 	}
 	a.trace = handback.Trace{StartedAt: time.Now().UTC(), Timings: map[string]string{}}
+	caps := b.Capabilities()
+	a.trace.Backend, a.trace.BackendVersion = caps.Name, caps.Version
+	a.backend = caps
 
 	p, err := b.NewPage(ctx)
 	if err != nil {
@@ -636,6 +640,7 @@ func (a *Authenticator) capture(ctx context.Context, p browser.Page, rec *handba
 		Target: a.Target, Account: a.Account, Origin: state.Origin,
 		Cookies: state.Cookies, LocalStorage: state.LocalStorage, SessionStorage: state.SessionStorage,
 		AuthHeaders: authHeaders, UserAgent: state.UserAgent, LandingURL: landing, CapturedAt: time.Now().UTC(),
+		Backend: a.backend.Name, BackendVersion: a.backend.Version,
 	}
 	// Token expiry from bearer/JWT in headers or storage.
 	vals := []string{authHeaders["authorization"]}

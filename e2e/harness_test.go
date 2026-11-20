@@ -32,7 +32,12 @@ func skipUnlessE2E(t *testing.T) {
 	}
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessBackend(t, "chromium") }
+
+// newHarnessBackend builds a harness on a named browser backend. For a backend
+// whose sidecar/runtime isn't installed (e.g. camoufox without Xvfb), Open fails
+// and the test is skipped rather than failed.
+func newHarnessBackend(t *testing.T, backend string) *harness {
 	t.Helper()
 	skipUnlessE2E(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -40,10 +45,13 @@ func newHarness(t *testing.T) *harness {
 	ts := httptest.NewServer(s.Handler())
 	s.SetBase(ts.URL)
 	ws := t.TempDir()
-	b, err := browser.Open(ctx, "chromium", browser.Options{Headless: true, ProfileDir: ws + "/profile", Logger: t.Logf})
+	b, err := browser.Open(ctx, backend, browser.Options{Headless: true, ProfileDir: ws + "/profile", AccountDir: ws, Logger: t.Logf})
 	if err != nil {
 		cancel()
 		ts.Close()
+		if backend != "chromium" {
+			t.Skipf("%s backend unavailable (sidecar/runtime not installed): %v", backend, err)
+		}
 		t.Fatalf("launch browser: %v", err)
 	}
 	h := &harness{t: t, lab: s, ts: ts, b: b, ctx: ctx, stop: cancel, ws: ws}

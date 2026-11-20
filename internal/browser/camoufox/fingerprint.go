@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,27 @@ type Fingerprint struct {
 
 func fingerprintPath(accountDir string) string {
 	return filepath.Join(accountDir, fingerprintFile)
+}
+
+// regionFromProxy returns a region tag for fingerprint keying. The sidecar does
+// the real geoip (timezone/locale matched to the proxy exit); the Go side only
+// needs a stable tag that changes when the proxy changes, so it uses the proxy
+// host. No proxy → "" (region-agnostic: a saved fingerprint is always reused).
+func regionFromProxy(proxyURL string) string {
+	s := proxyURL
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.Index(s, "@"); i >= 0 { // strip credentials
+		s = s[i+1:]
+	}
+	if j := strings.IndexAny(s, "/?#"); j >= 0 {
+		s = s[:j]
+	}
+	return strings.ToLower(s)
 }
 
 // LoadFingerprint reads the account's saved fingerprint. It returns (nil, nil)

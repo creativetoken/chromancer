@@ -38,6 +38,8 @@ type SessionBundle struct {
 	ReplayReason   string            `json:"replay_reason,omitempty"`
 	LandingURL     string            `json:"landing_url"`
 	CapturedAt     time.Time         `json:"captured_at"`
+	Backend        string            `json:"backend,omitempty"`         // "chromium" | "camoufox"
+	BackendVersion string            `json:"backend_version,omitempty"` // engine/build version
 }
 
 // Trace is the short, human-readable account of what the job did.
@@ -57,6 +59,8 @@ type Trace struct {
 	StartedAt       time.Time         `json:"started_at"`
 	FinishedAt      time.Time         `json:"finished_at"`
 	SuccessEvidence []string          `json:"success_evidence,omitempty"`
+	Backend         string            `json:"backend,omitempty"`         // browser engine used ("chromium" | "camoufox")
+	BackendVersion  string            `json:"backend_version,omitempty"` // engine/build version
 }
 
 // Add appends a step to the trace.

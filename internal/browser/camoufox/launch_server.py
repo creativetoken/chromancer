@@ -65,6 +65,7 @@ def main():
 
     try:
         from camoufox.server import launch_server
+        import camoufox as camoufox_pkg
         import playwright
     except Exception as exc:
         print(json.dumps({"error": f"camoufox/playwright not installed: {exc}"}), flush=True)
@@ -103,6 +104,7 @@ def main():
         "ws": ws,
         "display": os.environ.get("DISPLAY", ""),
         "playwright_version": getattr(playwright, "__version__", ""),
+        "camoufox_version": getattr(camoufox_pkg, "__version__", ""),
     }
     print(json.dumps(ready), flush=True)
 

@@ -1,6 +1,44 @@
+Status: in progress — camoufox backend
+
 # PROGRESS
 
 > Single source of truth for resuming. On restart: read this file and `DECISIONS.md` first.
+
+## Camoufox backend (second browser engine) — Phase A + B
+> Plan: backend-neutral interfaces + registry (Phase A, chromium unchanged), then a Camoufox
+> (anti-detect Firefox over Playwright, virtual display) backend (Phase B).
+
+**Environment feasibility (recorded 2026-11-20):** host is macOS (Darwin arm64); `Xvfb` and
+`x11vnc` are not available (Linux-only). Camoufox `headless="virtual"` needs Xvfb, so Phase B's
+virtual-display + VNC handoff cannot run natively here. Docker *is* present. Decision: deliver
+Phase A fully and verifiably on chromium; write Phase B parts that build/unit-test here and defer
+live-only parts (real-site B0 spike, Xvfb e2e, VNC handoff) with reasons. See DECISIONS 2026-11-20.
+
+### Phase A — backend-neutral browser layer ✅ (tag `backend-neutral`)
+- [x] A1 interfaces + neutral `Value` + registry (`internal/browser/iface.go`, `types.go`)
+- [x] A2 rod impl moved to `internal/browser/rodbackend` (self-registers "chromium"); go-rod + gson import **only** from rodbackend (verified)
+- [x] A3 rod out of `internal/perceive` (`FrameOf` → `browser.Frame`, `fr.Eval`)
+- [x] A4 consumers to interfaces (auth/*, explore/*, captcha/*, handback, app) — `*browser.Page`→`browser.Page`
+- [x] A5 backend selection (`AGENTBROWSER_BACKEND` + `AGENTBROWSER_BACKEND_TARGETS`; `config.BackendFor` → `browser.Open`)
+- [x] A6 build/vet/race-unit/lint green; full lab e2e green on chromium (921s, unchanged); registry + `BackendFor` + conformance tests
+
+### Phase B — Camoufox backend
+Buildable/unit-testable on this host (done):
+- [x] B6 token-guarded handoff view proxy — the `ValidToken` fix; refuses every request incl. WebSocket upgrade without the token (`handoffview.go` + test)
+- [x] B2 version-match check (`version.go` + test: patch ok, major/minor skew fails)
+- [x] B1 per-account fingerprint persistence — stable across runs, regenerate on proxy-region change (`fingerprint.go` + test); Python sidecar launcher + ready-line parser (`sidecar.go`, `launch_server.py` + test); `scripts/camoufox-setup.sh`, `Dockerfile.camoufox`
+- [x] docs/CAMOUFOX.md + README `AGENTBROWSER_BACKEND` line
+
+Pending (next, needs playwright-go in go.mod — after the Phase A commit):
+- [ ] B2/B3 `camoufox.go` backend: playwright-go `Firefox.Connect(ws)` implementing Browser/Page/Frame/Element/Value; ctx→Playwright-timeout mapping + page-close-on-cancel; sidecar lifecycle (idle shutdown, group-kill, restart); network capture via `page.On`; ExportState/ImportState via cookies + storage state + per-origin sessionStorage init script; popups/new tabs
+- [ ] B4 `Capabilities{SupportsUAOverride:false, Display}`; register "camoufox"
+- [ ] B7 trace + bundle record backend + Camoufox version
+- [ ] B5 perceive e2e on both backends
+
+#### Deferred (environment-blocked; see DECISIONS 2026-11-20)
+- **B0 live spike + bot-detection comparison** — needs real sites (brief left `<SITE>` placeholders) + a controlled IP; crosses the no-real-site hard stop. Deferred.
+- **Live Xvfb e2e, live VNC handoff view** — host (macOS) has no Xvfb/x11vnc. The camoufox backend is written to compile + unit-test here; live runs happen on a Linux host / `Dockerfile.camoufox`.
+
 
 ## Agent takeover (recovery): **core complete** — deterministic → agent → human → failed{reason}
 - [x] **Five takeover tools on the shared LLM driver** (`internal/explore`) — `enter_verification`,

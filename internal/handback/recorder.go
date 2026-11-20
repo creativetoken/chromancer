@@ -61,7 +61,7 @@ type AuthRecording struct {
 // request/response during signup/login PLUS a bounded post-login capture
 // window. It records the AUTH FLOW ONLY — not a general traffic engine.
 type AuthRecorder interface {
-	Begin(ctx context.Context, p *browser.Page) error
+	Begin(ctx context.Context, p browser.Page) error
 	MarkAuthenticated(ctx context.Context, w CaptureWindow) error
 	// WaitWindow blocks until the post-login window is satisfied (N requests or T).
 	WaitWindow(ctx context.Context)
@@ -110,7 +110,7 @@ func NewRecorder() *Recorder {
 }
 
 // Begin implements AuthRecorder.
-func (r *Recorder) Begin(ctx context.Context, p *browser.Page) error {
+func (r *Recorder) Begin(ctx context.Context, p browser.Page) error {
 	r.mu.Lock()
 	r.rec = AuthRecording{Format: "har-1.2-json", StartedAt: time.Now().UTC(),
 		Note: "auth flow + bounded post-login window; secrets flagged, not removed"}

@@ -86,9 +86,10 @@ func (a *App) RunCrawl(ctx context.Context, account string, opts CrawlOptions, a
 	bctx, cancel := bud.Context(ctx)
 	defer cancel()
 
-	b, err := browser.Launch(bctx, browser.Options{Headless: a.Cfg.Headless, ProfileDir: ws.Profile, ProxyURL: a.Cfg.ProxyURL})
+	backend := a.Cfg.BackendFor(target)
+	b, err := browser.Open(bctx, backend, browser.Options{Headless: a.Cfg.Headless, ProfileDir: ws.Profile, ProxyURL: a.Cfg.ProxyURL, AccountDir: ws.AccountDir})
 	if err != nil {
-		return CrawlResult{Err: fmt.Errorf("launch browser: %w", err), Reason: "flow_failed"}
+		return CrawlResult{Err: fmt.Errorf("launch browser (%s): %w", backend, err), Reason: "flow_failed"}
 	}
 	defer b.Close()
 
@@ -200,7 +201,7 @@ func writeTrace(dir, account string, rep *explore.Report) string {
 
 // authedCheck is a lightweight "still logged in?" test for the crawl: not on an
 // auth route and no visible password field.
-func authedCheck(ctx context.Context, p *browser.Page, st perceive.State) bool {
+func authedCheck(ctx context.Context, p browser.Page, st perceive.State) bool {
 	if auth.IsSSOOnly(st) {
 		return false
 	}

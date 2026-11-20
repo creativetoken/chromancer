@@ -46,3 +46,45 @@ func TestDefaultLLMVisionWiredFromProvider(t *testing.T) {
 		t.Error("LLM.Vision should be true for an anthropic provider")
 	}
 }
+
+func TestBackendForPrecedence(t *testing.T) {
+	cfg := Config{
+		Backend:         "chromium",
+		BackendByTarget: map[string]string{"shop.example.com": "camoufox"},
+	}
+	cases := []struct {
+		target, want string
+	}{
+		{"https://shop.example.com/uk/login", "camoufox"}, // per-target override wins
+		{"shop.example.com", "camoufox"},                  // bare host
+		{"https://SHOP.example.com/", "camoufox"},         // case-insensitive host
+		{"https://other.example.com/login", "chromium"},   // falls back to global
+		{"", "chromium"}, // global default
+	}
+	for _, c := range cases {
+		if got := cfg.BackendFor(c.target); got != c.want {
+			t.Errorf("BackendFor(%q) = %q, want %q", c.target, got, c.want)
+		}
+	}
+
+	// No global set anywhere → defaults to chromium.
+	empty := Config{}
+	if got := empty.BackendFor("https://x.example.com"); got != "chromium" {
+		t.Errorf("empty config BackendFor = %q, want chromium", got)
+	}
+}
+
+func TestDefaultBackendFromEnv(t *testing.T) {
+	t.Setenv("AGENTBROWSER_BACKEND", "camoufox")
+	t.Setenv("AGENTBROWSER_BACKEND_TARGETS", "a.example.com=chromium, b.example.com=camoufox")
+	cfg := Default()
+	if cfg.Backend != "camoufox" {
+		t.Errorf("Backend = %q, want camoufox", cfg.Backend)
+	}
+	if cfg.BackendFor("https://a.example.com/x") != "chromium" {
+		t.Errorf("per-target override for a.example.com not applied")
+	}
+	if cfg.BackendFor("https://c.example.com/x") != "camoufox" {
+		t.Errorf("global backend not applied for unlisted host")
+	}
+}

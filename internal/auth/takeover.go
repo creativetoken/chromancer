@@ -85,7 +85,7 @@ func IsBlockPage(st perceive.State) bool {
 // wires the verification/captcha/success/human tools to the Authenticator's own
 // machinery. Success is gated ONLY by check_logged_in — the model saying "done"
 // is never enough.
-func (a *Authenticator) runAgent(ctx context.Context, p *browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode, reason string, since *time.Time) (bool, error) {
+func (a *Authenticator) runAgent(ctx context.Context, p browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode, reason string, since *time.Time) (bool, error) {
 	if a.Agent == nil {
 		return false, nil
 	}
@@ -163,7 +163,7 @@ func (a *Authenticator) runAgent(ctx context.Context, p *browser.Page, rec *hand
 // agentEnterVerification fetches the current code/link from the configured
 // channel and enters it, reusing doVerify (which honours since/claims/alias).
 // It returns only an outcome label — never the code.
-func (a *Authenticator) agentEnterVerification(ctx context.Context, p *browser.Page, deps FlowDeps, n *perceive.Node, channel string, wantLink bool, since *time.Time) (string, error) {
+func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Page, deps FlowDeps, n *perceive.Node, channel string, wantLink bool, since *time.Time) (string, error) {
 	st := mustPerceive(ctx, a, p)
 	vs := DetectVerifyStep(st)
 	if !vs.Needed {
@@ -192,7 +192,7 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p *browser.P
 
 // agentResend clicks the page's resend control and advances the since window so
 // the next fetch waits for a genuinely fresh code.
-func (a *Authenticator) agentResend(ctx context.Context, p *browser.Page, deps FlowDeps, n *perceive.Node, since *time.Time) error {
+func (a *Authenticator) agentResend(ctx context.Context, p browser.Page, deps FlowDeps, n *perceive.Node, since *time.Time) error {
 	target := n
 	if target == nil {
 		target = DetectVerifyStep(mustPerceive(ctx, a, p)).Resend
@@ -210,7 +210,7 @@ func (a *Authenticator) agentResend(ctx context.Context, p *browser.Page, deps F
 }
 
 // agentSolveCaptcha runs the existing captcha hook on the current page.
-func (a *Authenticator) agentSolveCaptcha(ctx context.Context, p *browser.Page) (string, error) {
+func (a *Authenticator) agentSolveCaptcha(ctx context.Context, p browser.Page) (string, error) {
 	hook := a.captchaHook(p)
 	if hook == nil {
 		return "no captcha solver configured", nil
@@ -223,7 +223,7 @@ func (a *Authenticator) agentSolveCaptcha(ctx context.Context, p *browser.Page) 
 
 // agentCheckLoggedIn runs deterministic success detection — the only gate on a
 // successful takeover.
-func (a *Authenticator) agentCheckLoggedIn(ctx context.Context, p *browser.Page, rec *handback.Recorder) (bool, []string) {
+func (a *Authenticator) agentCheckLoggedIn(ctx context.Context, p browser.Page, rec *handback.Recorder) (bool, []string) {
 	st, _, err := a.Perceiver.Perceive(ctx, p)
 	if err != nil {
 		return false, nil
@@ -237,7 +237,7 @@ func (a *Authenticator) agentCheckLoggedIn(ctx context.Context, p *browser.Page,
 
 // confirmAuthenticated re-perceives and runs success detection once (used after
 // a recovery that happened outside the resolve loop).
-func (a *Authenticator) confirmAuthenticated(ctx context.Context, p *browser.Page, rec *handback.Recorder) (bool, []string) {
+func (a *Authenticator) confirmAuthenticated(ctx context.Context, p browser.Page, rec *handback.Recorder) (bool, []string) {
 	return a.agentCheckLoggedIn(ctx, p, rec)
 }
 

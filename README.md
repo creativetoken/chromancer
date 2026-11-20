@@ -82,6 +82,7 @@ Everything is flags and environment variables; there is no config file.
 |---|---|
 | `AGENTBROWSER_KEY` | Required. base64 of 32 random bytes; encrypts stored credentials and sessions. `agentbrowser newkey` prints one. |
 | `AGENTBROWSER_WORKSPACE` | Where accounts and saved files live (default `.workspace`). |
+| `AGENTBROWSER_BACKEND` | Browser engine: `chromium` (default) or `camoufox` (anti-detect Firefox, Linux + Xvfb — see [docs/CAMOUFOX.md](docs/CAMOUFOX.md)). Pin per host with `AGENTBROWSER_BACKEND_TARGETS="host=camoufox,…"`. |
 | `AGENTBROWSER_HEADFUL` | Set to `1` to show the browser window. |
 | `AGENTBROWSER_PROXY` | Upstream proxy URL for the browser. |
 | `AGENTBROWSER_CHROME` | Path to a specific Chrome or Chromium binary. |

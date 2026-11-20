@@ -254,3 +254,27 @@
   mock-LLM e2e tests prove each solvable scenario completes, the bot-wall goes to a human with zero
   agent calls, a wrong password fails without the agent, a prompt-injection "delete account" is
   blocked by the deny-list while the legit login still completes, and no secret reaches the model.
+- 2026-11-20 · **Backend-neutral browser layer via interfaces + a registry; go-rod isolated to
+  `internal/browser/rodbackend`** · a second engine (Camoufox) needs the browser API free of
+  go-rod types. `internal/browser` keeps the neutral value types (`Cookie`, `SessionState`,
+  `RequestEvent`/`ResponseEvent`, `NetworkSink`, `Options`) and defines interfaces `Browser` /
+  `Page` / `Frame` / `Element` + a neutral `Value` (only `Str`/`Bool`/`Int`/`Float`/`Nil`/
+  `Unmarshal` are used by callers). `Frame` exposes `Eval` (perceive runs per-frame JS); `Element`
+  is an opaque handle (callers only pass it back to `Page` methods). Backends self-register via
+  `browser.Register(name, Factory)`; callers use `browser.Open(ctx, name, Options)`. This keeps
+  `internal/browser` import-free of any engine, so `git grep go-rod/rod` hits only `rodbackend`.
+  The `Rod()` escape hatches are dropped (no engine type in the exported API). · alt: a build-tag
+  swap (can't run both engines in one binary / pick per target) or generics over the rod types
+  (still leaks rod in signatures).
+- 2026-11-20 · **Phase B (Camoufox) is partially deferred on this host; Phase A ships in full** ·
+  host is macOS (Darwin arm64) with no `Xvfb`/`x11vnc` (Linux-only); Camoufox `headless="virtual"`
+  and the x11vnc/noVNC handoff view cannot run natively here, and the B0 live spike (compare
+  chromium vs camoufox on real bot-detection sites) was left with unfilled site/host placeholders in
+  the brief — running it would cross the "no real-site interaction beyond the authorized spike" hard
+  stop with undefined targets. Decision: implement and verify Phase A completely on chromium; write
+  the Phase B pieces that build/unit-test here (sidecar launcher + `scripts/camoufox-setup.sh` +
+  `Dockerfile.camoufox`, the playwright-go client behind the interface with the version-match check,
+  the token-guarded handoff proxy + its refusal test); defer the live-only parts (B0 real-site
+  spike, Xvfb-backed e2e, live VNC view) under PROGRESS.md "Deferred" with this reason. · alt: run
+  everything in a Linux Docker container — deferred because the live site comparison still needs
+  defined targets and a controlled IP the brief did not supply.

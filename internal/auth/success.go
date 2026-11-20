@@ -22,7 +22,7 @@ type Baseline struct {
 }
 
 // TakeBaseline snapshots cookies/storage before the flow runs.
-func TakeBaseline(ctx context.Context, p *browser.Page) Baseline {
+func TakeBaseline(ctx context.Context, p browser.Page) Baseline {
 	b := Baseline{Cookies: map[string]string{}, LocalKeys: map[string]bool{}, SessionKeys: map[string]bool{}, URL: p.URL()}
 	st, err := p.ExportState(ctx)
 	if err != nil {
@@ -64,7 +64,7 @@ type SuccessDetector struct{}
 // healthy login even on a logged-out or bot-challenge page. A restored session
 // must prove itself through the server-confirmed signals (/me 2xx, an
 // authed-only element); if it cannot, we fall through to a real login.
-func (SuccessDetector) IsAuthenticated(ctx context.Context, p *browser.Page, st perceive.State, base Baseline, xhrs []handback.HAREntry, trustStorage bool) (bool, []string) {
+func (SuccessDetector) IsAuthenticated(ctx context.Context, p browser.Page, st perceive.State, base Baseline, xhrs []handback.HAREntry, trustStorage bool) (bool, []string) {
 	var evidence []string
 	strong := false
 	f := Classify(st)

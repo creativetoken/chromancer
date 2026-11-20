@@ -1,4 +1,4 @@
-package browser
+package rodbackend
 
 import (
 	"context"
@@ -7,42 +7,22 @@ import (
 	"time"
 
 	"github.com/go-rod/rod/lib/proto"
+
+	"github.com/creativetoken/chromancer/internal/browser"
 )
-
-// Cookie is a browser cookie with its scoping flags.
-type Cookie struct {
-	Name     string  `json:"name"`
-	Value    string  `json:"value"`
-	Domain   string  `json:"domain"`
-	Path     string  `json:"path"`
-	Expires  float64 `json:"expires,omitempty"` // unix seconds; <=0 = session cookie
-	HTTPOnly bool    `json:"http_only"`
-	Secure   bool    `json:"secure"`
-	SameSite string  `json:"same_site,omitempty"`
-}
-
-// SessionState is the exportable/importable browser state for one origin.
-type SessionState struct {
-	Origin         string            `json:"origin"`
-	Cookies        []Cookie          `json:"cookies"`
-	LocalStorage   map[string]string `json:"local_storage"`
-	SessionStorage map[string]string `json:"session_storage"`
-	UserAgent      string            `json:"user_agent"`
-	CapturedAt     time.Time         `json:"captured_at"`
-}
 
 // ExportState captures all cookies plus the current origin's local/session
 // storage.
-func (p *Page) ExportState(ctx context.Context) (SessionState, error) {
+func (p *rodPage) ExportState(ctx context.Context) (browser.SessionState, error) {
 	rp := p.rp.Context(ctx)
-	st := SessionState{Origin: p.Origin(), CapturedAt: time.Now().UTC(), UserAgent: p.b.UserAgent(),
+	st := browser.SessionState{Origin: p.Origin(), CapturedAt: time.Now().UTC(), UserAgent: p.b.UserAgent(),
 		LocalStorage: map[string]string{}, SessionStorage: map[string]string{}}
 	res, err := proto.NetworkGetAllCookies{}.Call(rp)
 	if err != nil {
 		return st, fmt.Errorf("browser: get cookies: %w", err)
 	}
 	for _, c := range res.Cookies {
-		st.Cookies = append(st.Cookies, Cookie{
+		st.Cookies = append(st.Cookies, browser.Cookie{
 			Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
 			Expires: float64(c.Expires), HTTPOnly: c.HTTPOnly, Secure: c.Secure, SameSite: string(c.SameSite),
 		})
@@ -66,7 +46,7 @@ func (p *Page) ExportState(ctx context.Context) (SessionState, error) {
 // ImportState sets cookies, then navigates to the origin and restores
 // local/session storage. The caller should navigate to the landing page
 // afterwards.
-func (p *Page) ImportState(ctx context.Context, st SessionState) error {
+func (p *rodPage) ImportState(ctx context.Context, st browser.SessionState) error {
 	rp := p.rp.Context(ctx)
 	if len(st.Cookies) > 0 {
 		params := make([]*proto.NetworkCookieParam, 0, len(st.Cookies))

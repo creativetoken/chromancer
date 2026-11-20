@@ -33,7 +33,7 @@ func (b *Blocked) Error() string { return "blocked: " + b.Category }
 // is checked here before every click/submit/navigate, secret placeholders are
 // substituted here (never in the model context), and every action is audited.
 type Executor struct {
-	Page    *browser.Page
+	Page    browser.Page
 	Audit   audit.AuditLog
 	Secrets Secrets
 	Timeout time.Duration

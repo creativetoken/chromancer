@@ -15,8 +15,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-rod/rod"
-
 	"github.com/creativetoken/chromancer/internal/browser"
 )
 
@@ -57,7 +55,7 @@ type StateHash string
 
 // Perceiver turns a live Page into a State.
 type Perceiver interface {
-	Perceive(ctx context.Context, p *browser.Page) (State, StateHash, error)
+	Perceive(ctx context.Context, p browser.Page) (State, StateHash, error)
 	// NeedsVision reports whether structured perception is insufficient (no
 	// interactive nodes, canvas-only UI, suspected CAPTCHA). v1 escalation is a
 	// stub: callers may take a screenshot and hand it to a vision model.
@@ -77,7 +75,7 @@ type A11yPerceiver struct {
 func New() *A11yPerceiver { return &A11yPerceiver{MaxNodes: 150, MaxText: 1500} }
 
 // Perceive implements Perceiver.
-func (a *A11yPerceiver) Perceive(ctx context.Context, p *browser.Page) (State, StateHash, error) {
+func (a *A11yPerceiver) Perceive(ctx context.Context, p browser.Page) (State, StateHash, error) {
 	frames, err := p.Frames(ctx)
 	if err != nil {
 		return State{}, "", err
@@ -85,7 +83,7 @@ func (a *A11yPerceiver) Perceive(ctx context.Context, p *browser.Page) (State, S
 	st := State{URL: p.URL(), Title: p.Title(), Frames: len(frames)}
 	base := 1
 	for fi, fr := range frames {
-		res, err := fr.Context(ctx).Eval(walkJS, base, fi)
+		res, err := fr.Eval(ctx, walkJS, base, fi)
 		if err != nil {
 			if fi == 0 {
 				return State{}, "", fmt.Errorf("perceive: eval: %w", err)
@@ -93,7 +91,7 @@ func (a *A11yPerceiver) Perceive(ctx context.Context, p *browser.Page) (State, S
 			continue
 		}
 		var out frameOut
-		if err := json.Unmarshal([]byte(res.Value.Str()), &out); err != nil {
+		if err := json.Unmarshal([]byte(res.Str()), &out); err != nil {
 			if fi == 0 {
 				return State{}, "", fmt.Errorf("perceive: decode: %w", err)
 			}
@@ -130,8 +128,8 @@ func (a *A11yPerceiver) NeedsVision(s State) bool {
 	return false
 }
 
-// FrameOf returns the rod page for a node's frame.
-func FrameOf(ctx context.Context, p *browser.Page, n Node) (*rod.Page, error) {
+// FrameOf returns the frame handle for a node's frame.
+func FrameOf(ctx context.Context, p browser.Page, n Node) (browser.Frame, error) {
 	frames, err := p.Frames(ctx)
 	if err != nil {
 		return nil, err

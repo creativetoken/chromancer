@@ -1,4 +1,4 @@
-package browser
+package rodbackend
 
 import (
 	"context"
@@ -8,49 +8,19 @@ import (
 	"time"
 
 	"github.com/go-rod/rod/lib/proto"
+
+	"github.com/creativetoken/chromancer/internal/browser"
 )
 
-// RequestEvent is one observed request (headers merged from the main event and
-// the ExtraInfo event when available).
-type RequestEvent struct {
-	ID        string            `json:"id"`
-	At        time.Time         `json:"at"`
-	Method    string            `json:"method"`
-	URL       string            `json:"url"`
-	Headers   map[string]string `json:"headers"`
-	PostData  string            `json:"post_data,omitempty"`
-	Type      string            `json:"type"` // Document | XHR | Fetch | Script | …
-	Initiator string            `json:"initiator,omitempty"`
-}
-
-// ResponseEvent is one observed response. Body is filled when available.
-type ResponseEvent struct {
-	ID       string            `json:"id"`
-	At       time.Time         `json:"at"`
-	URL      string            `json:"url"`
-	Status   int               `json:"status"`
-	Headers  map[string]string `json:"headers"`
-	MimeType string            `json:"mime_type"`
-	Body     string            `json:"body,omitempty"`
-	Base64   bool              `json:"base64,omitempty"`
-	Type     string            `json:"type"`
-}
-
-// NetworkSink receives network events.
-type NetworkSink interface {
-	OnRequest(RequestEvent)
-	OnResponse(ResponseEvent)
-}
-
-// Subscribe streams CDP network events for this page to sink until the
-// returned cancel func is called or ctx ends. Response bodies are fetched for
+// Subscribe streams CDP network events for this page to sink until the returned
+// cancel func is called or ctx ends. Response bodies are fetched for
 // XHR/Fetch/Document responses (bounded size) when the loading finishes.
-func (p *Page) Subscribe(ctx context.Context, sink NetworkSink) (cancel func()) {
+func (p *rodPage) Subscribe(ctx context.Context, sink browser.NetworkSink) (cancel func()) {
 	sctx, stop := context.WithCancel(ctx)
 	rp := p.rp.Context(sctx)
 	var (
 		mu       sync.Mutex
-		pending  = map[proto.NetworkRequestID]*ResponseEvent{}
+		pending  = map[proto.NetworkRequestID]*browser.ResponseEvent{}
 		reqTypes = map[proto.NetworkRequestID]string{}
 		extra    = map[proto.NetworkRequestID]map[string]string{}
 	)
@@ -66,7 +36,7 @@ func (p *Page) Subscribe(ctx context.Context, sink NetworkSink) (cancel func()) 
 		defer close(done)
 		rp.EachEvent(
 			func(e *proto.NetworkRequestWillBeSent) {
-				ev := RequestEvent{ID: string(e.RequestID), At: time.Now().UTC(), Method: e.Request.Method, URL: e.Request.URL,
+				ev := browser.RequestEvent{ID: string(e.RequestID), At: time.Now().UTC(), Method: e.Request.Method, URL: e.Request.URL,
 					Headers: headersOf(e.Request.Headers), Type: string(e.Type)}
 				if e.Request.HasPostData {
 					ev.PostData = e.Request.PostData
@@ -95,7 +65,7 @@ func (p *Page) Subscribe(ctx context.Context, sink NetworkSink) (cancel func()) 
 			},
 			func(e *proto.NetworkResponseReceived) {
 				mu.Lock()
-				pending[e.RequestID] = &ResponseEvent{ID: string(e.RequestID), At: time.Now().UTC(), URL: e.Response.URL,
+				pending[e.RequestID] = &browser.ResponseEvent{ID: string(e.RequestID), At: time.Now().UTC(), URL: e.Response.URL,
 					Status: e.Response.Status, Headers: headersOf(e.Response.Headers), MimeType: e.Response.MIMEType, Type: string(e.Type)}
 				mu.Unlock()
 			},

@@ -131,7 +131,7 @@ func (r *chainResolver) Exhausted(c Challenge) bool {
 
 // Resolve applies the next eligible solver's result to the page (via Injector)
 // and returns it with its solveID. It does NOT submit.
-func (r *chainResolver) Resolve(ctx context.Context, p *browser.Page, c Challenge) (Result, error) {
+func (r *chainResolver) Resolve(ctx context.Context, p browser.Page, c Challenge) (Result, error) {
 	r.mu.Lock()
 	el := r.eligible(c)
 	idx := r.tried[key(c)]
@@ -214,7 +214,7 @@ func (r *chainResolver) Resolve(ctx context.Context, p *browser.Page, c Challeng
 
 // waitFieldFilled polls a response-field selector until it holds a non-empty
 // value or the timeout elapses; it reports whether the field filled.
-func waitFieldFilled(ctx context.Context, p *browser.Page, sel string, timeout time.Duration) bool {
+func waitFieldFilled(ctx context.Context, p browser.Page, sel string, timeout time.Duration) bool {
 	const js = `(sel) => { for (const s of sel.split(',')) { const el = document.querySelector(s.trim()); if (el && el.value) return true; } return false; }`
 	deadline := time.Now().Add(timeout)
 	for {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/creativetoken/chromancer/internal/browser"
+	_ "github.com/creativetoken/chromancer/internal/browser/rodbackend" // register "chromium" backend
 	"github.com/creativetoken/chromancer/internal/lab"
 )
 
@@ -18,7 +19,7 @@ type harness struct {
 	t    *testing.T
 	lab  *lab.Server
 	ts   *httptest.Server
-	b    *browser.Browser
+	b    browser.Browser
 	ctx  context.Context
 	stop context.CancelFunc
 	ws   string
@@ -39,7 +40,7 @@ func newHarness(t *testing.T) *harness {
 	ts := httptest.NewServer(s.Handler())
 	s.SetBase(ts.URL)
 	ws := t.TempDir()
-	b, err := browser.Launch(ctx, browser.Options{Headless: true, ProfileDir: ws + "/profile", Logger: t.Logf})
+	b, err := browser.Open(ctx, "chromium", browser.Options{Headless: true, ProfileDir: ws + "/profile", Logger: t.Logf})
 	if err != nil {
 		cancel()
 		ts.Close()

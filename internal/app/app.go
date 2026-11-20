@@ -14,6 +14,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/audit"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/browser"
+	_ "github.com/creativetoken/chromancer/internal/browser/rodbackend" // register "chromium" backend
 	"github.com/creativetoken/chromancer/internal/captcha"
 	"github.com/creativetoken/chromancer/internal/captcha/plugin"
 	"github.com/creativetoken/chromancer/internal/captcha/solver"
@@ -142,9 +143,10 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	bctx, cancel := bud.Context(ctx)
 	defer cancel()
 
-	b, err := browser.Launch(bctx, browser.Options{Headless: a.Cfg.Headless, ProfileDir: ws.Profile, ProxyURL: a.Cfg.ProxyURL, UserAgent: a.Cfg.UserAgent})
+	backend := a.Cfg.BackendFor(target)
+	b, err := browser.Open(bctx, backend, browser.Options{Headless: a.Cfg.Headless, ProfileDir: ws.Profile, ProxyURL: a.Cfg.ProxyURL, UserAgent: a.Cfg.UserAgent, AccountDir: ws.AccountDir})
 	if err != nil {
-		return AuthResult{Err: fmt.Errorf("launch browser: %w", err), Reason: "flow_failed"}
+		return AuthResult{Err: fmt.Errorf("launch browser (%s): %w", backend, err), Reason: "flow_failed"}
 	}
 	defer b.Close()
 

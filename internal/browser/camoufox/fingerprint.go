@@ -15,14 +15,16 @@ import (
 // existing account unless the proxy region changed (see ResolveFingerprint).
 const fingerprintFile = "camoufox.json"
 
-// Fingerprint is the persisted Camoufox fingerprint/config for one account. The
-// Config blob is opaque (produced by Camoufox); Region records the geoip/proxy
-// region it was generated for so a later run with a different-region proxy does
-// not mix a US timezone/locale fingerprint with an EU exit IP.
+// Fingerprint is the persisted Camoufox fingerprint for one account. The
+// Fingerprint blob is opaque (produced by Camoufox's generate_fingerprint in the
+// sidecar); Region records the geoip/proxy region it was generated for so a later
+// run with a different-region proxy does not mix a US timezone/locale fingerprint
+// with an EU exit IP. The sidecar writes this file on first run and reuses it
+// thereafter; the Go side only invalidates it when the region changes.
 type Fingerprint struct {
-	Region    string          `json:"region"`
-	Config    json.RawMessage `json:"config"`
-	CreatedAt time.Time       `json:"created_at"`
+	Region      string          `json:"region"`
+	Fingerprint json.RawMessage `json:"fingerprint"`
+	CreatedAt   time.Time       `json:"created_at,omitempty"`
 }
 
 func fingerprintPath(accountDir string) string {

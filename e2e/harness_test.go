@@ -32,7 +32,15 @@ func skipUnlessE2E(t *testing.T) {
 	}
 }
 
-func newHarness(t *testing.T) *harness { return newHarnessBackend(t, "chromium") }
+// newHarness builds a harness on the backend named by AGENTBROWSER_E2E_BACKEND
+// (default "chromium"), so the whole lab suite can be run against either engine.
+func newHarness(t *testing.T) *harness {
+	backend := os.Getenv("AGENTBROWSER_E2E_BACKEND")
+	if backend == "" {
+		backend = "chromium"
+	}
+	return newHarnessBackend(t, backend)
+}
 
 // newHarnessBackend builds a harness on a named browser backend. For a backend
 // whose sidecar/runtime isn't installed (e.g. camoufox without Xvfb), Open fails

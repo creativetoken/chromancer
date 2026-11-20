@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pw "github.com/playwright-community/playwright-go"
+	pw "github.com/mxschmitt/playwright-go"
 
 	"github.com/creativetoken/chromancer/internal/browser"
 )

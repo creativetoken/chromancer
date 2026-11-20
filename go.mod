@@ -8,7 +8,7 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20220912192320-0145f2c60ead
 	github.com/go-rod/rod v0.116.2
 	github.com/makiuchi-d/gozxing v0.1.1
-	github.com/playwright-community/playwright-go v0.5200.0
+	github.com/mxschmitt/playwright-go v0.6100.0
 	github.com/ysmood/gson v0.7.3
 	golang.org/x/crypto v0.59.0
 	golang.org/x/net v0.62.0
@@ -17,8 +17,8 @@ require (
 )
 
 require (
-	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
+	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/ysmood/fetchup v0.2.3 // indirect

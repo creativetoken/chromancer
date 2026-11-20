@@ -47,7 +47,7 @@ func TestResolveFingerprintStability(t *testing.T) {
 	}
 
 	// Persist a fingerprint for region gb.
-	saved := &Fingerprint{Region: "gb", Config: json.RawMessage(`{"ua":"x","tz":"Europe/London"}`), CreatedAt: time.Now()}
+	saved := &Fingerprint{Region: "gb", Fingerprint: json.RawMessage(`{"ua":"x","tz":"Europe/London"}`), CreatedAt: time.Now()}
 	if err := SaveFingerprint(dir, saved); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestResolveFingerprintStability(t *testing.T) {
 	if regen {
 		t.Error("same-region run must reuse the saved fingerprint, not regenerate")
 	}
-	if got == nil || !sameJSON(got.Config, saved.Config) {
+	if got == nil || !sameJSON(got.Fingerprint, saved.Fingerprint) {
 		t.Errorf("reused fingerprint differs: %+v", got)
 	}
 
@@ -77,15 +77,15 @@ func TestResolveFingerprintStability(t *testing.T) {
 
 func TestFingerprintDiffersAcrossAccounts(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
-	if err := SaveFingerprint(a, &Fingerprint{Region: "gb", Config: json.RawMessage(`{"id":"A"}`)}); err != nil {
+	if err := SaveFingerprint(a, &Fingerprint{Region: "gb", Fingerprint: json.RawMessage(`{"id":"A"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveFingerprint(b, &Fingerprint{Region: "gb", Config: json.RawMessage(`{"id":"B"}`)}); err != nil {
+	if err := SaveFingerprint(b, &Fingerprint{Region: "gb", Fingerprint: json.RawMessage(`{"id":"B"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	fa, _ := LoadFingerprint(a)
 	fb, _ := LoadFingerprint(b)
-	if fa == nil || fb == nil || string(fa.Config) == string(fb.Config) {
+	if fa == nil || fb == nil || string(fa.Fingerprint) == string(fb.Fingerprint) {
 		t.Errorf("two accounts must keep distinct fingerprints: %v vs %v", fa, fb)
 	}
 }

@@ -16,8 +16,8 @@
 # by design; use the chromium backend or run this in Docker (Dockerfile.camoufox).
 set -euo pipefail
 
-CAMOUFOX_VERSION="${CAMOUFOX_VERSION:-0.4.11}"
-PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.52.0}"
+CAMOUFOX_VERSION="${CAMOUFOX_VERSION:-0.5.9}"
+PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.61.0}"  # camoufox 0.5.9 allows playwright<1.63; 1.61 matches playwright-go v0.6100.0
 VENV="${CAMOUFOX_VENV:-.venv-camoufox}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then

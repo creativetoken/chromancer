@@ -14,10 +14,12 @@ import (
 // startup and fail with a clear message.
 //
 // Keep this in lockstep with:
-//   - the playwright-go `require` in go.mod,
+//   - the playwright-go `require` in go.mod (github.com/mxschmitt/playwright-go
+//     v0.6100.0 ↔ Playwright 1.61.0),
 //   - the camoufox / playwright pins in scripts/camoufox-setup.sh and
-//     Dockerfile.camoufox.
-const PlaywrightVersion = "1.52.0"
+//     Dockerfile.camoufox (camoufox 0.5.9 allows playwright<1.63, so we pin
+//     playwright 1.61.0 to match the Go client).
+const PlaywrightVersion = "1.61.0"
 
 // majorMinor returns the "MAJOR.MINOR" prefix of a dotted version string.
 func majorMinor(v string) (string, bool) {

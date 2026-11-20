@@ -2,57 +2,88 @@
 """Camoufox Playwright-server sidecar.
 
 Launches ONE Camoufox (anti-detect Firefox) Playwright server in a virtual
-display (Xvfb) and prints a single JSON "ready" line on stdout:
+display (Xvfb) and prints a single JSON "ready" line on stdout once the server
+is actually accepting connections:
 
-    {"ws": "ws://127.0.0.1:PORT/...", "display": ":99", "playwright_version": "1.52.0"}
+    {"ws": "ws://127.0.0.1:PORT/camoufox", "display": ":99",
+     "playwright_version": "1.61.0", "camoufox_version": "0.5.9"}
 
 The Go parent reads that line, connects with playwright-go (Firefox.Connect),
-and keeps the process alive for the account's session. One server per account
-gives that account a STABLE fingerprint: the fingerprint/config is read from
-(and, on first run, written to) the path in CAMOUFOX_FINGERPRINT.
+and keeps the process alive for the account's session.
 
-Config comes from environment variables (never the command line, so secrets such
-as proxy credentials never show up in the process list):
+Camoufox's `launch_server(...)` BLOCKS (it runs the Playwright server in the
+foreground and prints its own ws endpoint), so it cannot return a handle. We
+therefore run it in a daemon thread on a FIXED port the Go parent chose
+(CAMOUFOX_PORT), wait for that port to accept TCP, then announce the ws endpoint
+ourselves — no parsing of Camoufox's coloured stdout, no connect-before-listen
+race.
+
+One server per account gives that account a STABLE fingerprint: the
+fingerprint/config is read from (and, on first run, written to) CAMOUFOX_FINGERPRINT.
+
+Config comes from environment variables (never argv, so proxy credentials never
+show up in the process list):
 
     CAMOUFOX_HOST          bind host (default 127.0.0.1)
-    CAMOUFOX_PORT          bind port (default 0 = random free port)
+    CAMOUFOX_PORT          bind port (REQUIRED; the Go parent picks a free one)
     CAMOUFOX_PROXY         upstream proxy URL (optional)
     CAMOUFOX_GEOIP         "1" to match geoip/timezone/locale to the proxy exit
     CAMOUFOX_FINGERPRINT   path to the persisted fingerprint/config JSON
     CAMOUFOX_REGION        region tag recorded alongside a freshly generated fingerprint
 
-NOTE: This runs only where Xvfb + the camoufox package are installed (Linux;
-see scripts/camoufox-setup.sh and Dockerfile.camoufox). It is exercised live in
-that environment; on hosts without Xvfb the backend is unavailable by design.
+Runs only where Xvfb + the camoufox package are installed (Linux; see
+scripts/camoufox-setup.sh and Dockerfile.camoufox).
 """
+import importlib.metadata
 import json
 import os
+import socket
 import sys
+import threading
 import time
+
+
+def _pkg_version(pkg):
+    """Installed package version string, or "" — resolved via distribution
+    metadata because playwright has no __version__ and camoufox's is a submodule."""
+    try:
+        return importlib.metadata.version(pkg)
+    except Exception:
+        return ""
 
 
 def _load_fingerprint(path):
     if path and os.path.exists(path):
         try:
             with open(path) as fh:
-                data = json.load(fh)
-            return data.get("config")
-        except Exception as exc:  # fall back to a fresh fingerprint
+                return json.load(fh).get("fingerprint")
+        except Exception as exc:
             print(f"camoufox: could not read fingerprint {path}: {exc}", file=sys.stderr)
     return None
 
 
-def _save_fingerprint(path, config, region):
+def _save_fingerprint(path, fp, region):
     if not path:
         return
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w") as fh:
-            json.dump({"region": region, "config": config}, fh)
+            json.dump({"region": region, "fingerprint": fp}, fh)
         os.replace(tmp, path)
     except Exception as exc:
         print(f"camoufox: could not save fingerprint {path}: {exc}", file=sys.stderr)
+
+
+def _port_open(host, port):
+    # create_connection handles both IPv4 (127.0.0.1) and IPv6 (::1) loopback.
+    try:
+        with socket.create_connection((host, port), timeout=0.25):
+            return True
+    except OSError:
+        return False
 
 
 def main():
@@ -63,52 +94,75 @@ def main():
     fp_path = os.environ.get("CAMOUFOX_FINGERPRINT", "")
     region = os.environ.get("CAMOUFOX_REGION", "")
 
+    if port == 0:
+        print(json.dumps({"error": "CAMOUFOX_PORT is required (the parent must pick a free port)"}), flush=True)
+        sys.exit(2)
+
     try:
         from camoufox.server import launch_server
-        import camoufox as camoufox_pkg
-        import playwright
+        from camoufox.utils import generate_fingerprint
     except Exception as exc:
         print(json.dumps({"error": f"camoufox/playwright not installed: {exc}"}), flush=True)
         sys.exit(3)
 
-    kwargs = dict(
-        headless="virtual",   # Xvfb-backed virtual display
-        port=port,
-        ws_path="camoufox",
-    )
+    # Bind the Playwright server to IPv4 loopback explicitly: Camoufox/Playwright
+    # otherwise resolves "localhost" to IPv6 (::1), which the Go client's endpoint
+    # and the readiness poll may not match.
+    kwargs = dict(headless="virtual", host=host, port=port, ws_path="camoufox")
     if proxy_url:
         kwargs["proxy"] = {"server": proxy_url}
-        kwargs["geoip"] = geoip or True  # match geoip to the proxy exit
+        kwargs["geoip"] = True  # match geoip/timezone/locale to the proxy exit
     elif geoip:
         kwargs["geoip"] = True
 
-    saved = _load_fingerprint(fp_path)
-    if saved is not None:
-        # Reuse the account's stable fingerprint/config verbatim.
-        kwargs["config"] = saved
+    # Stable per-account fingerprint: reuse the saved one; on first run generate
+    # one and persist it so later runs for this account look identical, while two
+    # different accounts get independent fingerprints.
+    fp = _load_fingerprint(fp_path)
+    if fp is None:
+        fp = generate_fingerprint()
+        _save_fingerprint(fp_path, fp, region)
+    kwargs["fingerprint"] = fp
 
-    # launch_server starts the Playwright server and returns a handle exposing
-    # the ws endpoint; it keeps running until the process is killed.
-    server = launch_server(**kwargs)
-    ws = getattr(server, "ws_endpoint", None) or getattr(server, "wsEndpoint", None)
-    if ws is None and hasattr(server, "ws_endpoint_url"):
-        ws = server.ws_endpoint_url
+    # launch_server blocks; run it in a daemon thread and capture a startup error.
+    err = {}
 
-    if saved is None:
-        # Persist the fingerprint Camoufox generated so later runs are stable.
-        gen = getattr(server, "config", None)
-        if gen is not None:
-            _save_fingerprint(fp_path, gen, region)
+    def _run():
+        try:
+            launch_server(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            err["e"] = exc
 
-    ready = {
+    threading.Thread(target=_run, daemon=True).start()
+
+    # Wait until the server is actually accepting connections (or it failed).
+    # Prefer the IPv4 host we asked for, but fall back to ::1 in case Playwright
+    # bound IPv6 loopback regardless, and report whichever actually listens.
+    ws = None
+    for _ in range(600):  # up to ~60s
+        if "e" in err:
+            break
+        if _port_open(host, port):
+            ws = f"ws://{host}:{port}/camoufox"
+            break
+        if _port_open("::1", port):
+            ws = f"ws://[::1]:{port}/camoufox"
+            break
+        time.sleep(0.1)
+
+    if ws is None:
+        reason = err.get("e", "timed out waiting for the server port")
+        print(json.dumps({"error": f"camoufox server did not start: {reason}"}), flush=True)
+        sys.exit(4)
+
+    print(json.dumps({
         "ws": ws,
         "display": os.environ.get("DISPLAY", ""),
-        "playwright_version": getattr(playwright, "__version__", ""),
-        "camoufox_version": getattr(camoufox_pkg, "__version__", ""),
-    }
-    print(json.dumps(ready), flush=True)
+        "playwright_version": _pkg_version("playwright"),
+        "camoufox_version": _pkg_version("camoufox"),
+    }), flush=True)
 
-    # Keep the server alive until killed by the parent (process-group kill).
+    # Keep the server alive until the parent kills the process group.
     try:
         while True:
             time.sleep(3600)

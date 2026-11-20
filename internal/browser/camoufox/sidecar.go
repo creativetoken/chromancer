@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -50,6 +52,33 @@ type Sidecar struct {
 	script  string // temp path of the embedded python script
 	stopped sync.Once
 	logger  func(format string, args ...any)
+
+	waitCh  chan error // closed when the process exits; holds the exit error
+	waitErr error      // the process exit error (valid once waitCh is closed)
+}
+
+// Endpoint returns the sidecar's Playwright ws endpoint.
+func (s *Sidecar) Endpoint() string { return s.WS }
+
+// Wait blocks until the sidecar process exits and returns its exit error (nil on
+// a clean exit). It is safe to call concurrently and more than once.
+func (s *Sidecar) Wait() error {
+	if s.waitCh == nil {
+		return nil
+	}
+	<-s.waitCh
+	return s.waitErr
+}
+
+// startWaiter spawns the single goroutine that reaps the process; everything
+// else (Wait, Close) observes exit via waitCh instead of calling cmd.Wait again
+// (which is not allowed twice).
+func (s *Sidecar) startWaiter() {
+	s.waitCh = make(chan error, 1)
+	go func() {
+		s.waitErr = s.cmd.Wait()
+		close(s.waitCh)
+	}()
 }
 
 // parseReady scans the sidecar's stdout for the JSON ready line. It tolerates
@@ -102,10 +131,16 @@ func StartSidecar(ctx context.Context, o SidecarOptions) (*Sidecar, error) {
 	}
 	f.Close()
 
+	port, err := freePort()
+	if err != nil {
+		os.Remove(f.Name())
+		return nil, fmt.Errorf("camoufox: pick port: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, py, "-I", f.Name())
 	cmd.Env = append(os.Environ(),
 		"CAMOUFOX_HOST=127.0.0.1",
-		"CAMOUFOX_PORT=0",
+		"CAMOUFOX_PORT="+strconv.Itoa(port),
 		"CAMOUFOX_PROXY="+o.ProxyURL,
 		"CAMOUFOX_FINGERPRINT="+o.FingerprintPath,
 		"CAMOUFOX_REGION="+o.Region,
@@ -127,6 +162,7 @@ func StartSidecar(ctx context.Context, o SidecarOptions) (*Sidecar, error) {
 	}
 
 	s := &Sidecar{cmd: cmd, script: f.Name(), logger: o.Logger}
+	s.startWaiter()
 
 	// Parse the ready line with the ctx deadline honoured.
 	type res struct {
@@ -161,6 +197,17 @@ func (s *Sidecar) logf(format string, args ...any) {
 	}
 }
 
+// freePort reserves a free loopback TCP port and returns it. The sidecar binds
+// it moments later; a brief gap is acceptable since the port is otherwise idle.
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
 // Close kills the sidecar's whole process group (Xvfb + Firefox + Playwright
 // server) and removes the temp script. Safe to call more than once.
 func (s *Sidecar) Close() {
@@ -170,15 +217,16 @@ func (s *Sidecar) Close() {
 			// Negative pid → signal the whole process group.
 			if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
 				_ = s.cmd.Process.Kill()
-			} else {
-				// Give it a moment, then SIGKILL the group if still alive.
-				done := make(chan struct{})
-				go func() { _, _ = s.cmd.Process.Wait(); close(done) }()
+			} else if s.waitCh != nil {
+				// Give it a moment, then SIGKILL the group if still alive. The
+				// central waiter reaps the process; we only observe its exit.
 				select {
-				case <-done:
+				case <-s.waitCh:
 				case <-time.After(3 * time.Second):
 					_ = syscall.Kill(-pid, syscall.SIGKILL)
 				}
+			} else {
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
 			}
 		}
 		if s.script != "" {

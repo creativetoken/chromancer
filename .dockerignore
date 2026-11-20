@@ -1,0 +1,16 @@
+# Never copy secrets, local state or build junk into an image build context.
+.workspace/
+workspace/
+.env
+.env.*
+!.env.example
+.git/
+bin/
+dist/
+*.log
+*.test
+*.out
+coverage.*
+.DS_Store
+.idea/
+.vscode/

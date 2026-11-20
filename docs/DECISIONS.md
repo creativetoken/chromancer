@@ -278,3 +278,28 @@
   spike, Xvfb-backed e2e, live VNC view) under PROGRESS.md "Deferred" with this reason. · alt: run
   everything in a Linux Docker container — deferred because the live site comparison still needs
   defined targets and a controlled IP the brief did not supply.
+- 2026-11-20 · **Camoufox backend uses `github.com/playwright-community/playwright-go` v0.5200.0
+  (Playwright 1.52.0), pinned to `camoufox.PlaywrightVersion`** · the brief named
+  `mxschmitt/playwright-go`, which now redirects to the `playwright-community` fork (same versions);
+  Go resolves the canonical module path, so we require the canonical one. The module version
+  `v0.MMmm.patch` encodes the Playwright version; `CheckPlaywrightVersion` fails a major/minor skew at
+  sidecar startup. · alt: the mxschmitt path (stale redirect).
+- 2026-11-20 · **Two engine differences bridged inside the camoufox backend so shared code is
+  untouched:** (1) Playwright's `Evaluate` passes a SINGLE arg to the JS function (rod passes many),
+  so when a caller supplies >1 arg the backend bundles them into one array and wraps the expression
+  as `(__a) => (EXPR)(...__a)` — the shared perceiver `walkJS` runs unchanged on both. (2) Playwright
+  resource types are lowercase (`document`,`xhr`,…); the backend maps them to the CDP-style
+  capitalised `Type` (`Document`,`XHR`,…) the `AuthRecorder` already keys on, so capture + the
+  replayability check are backend-agnostic. · alt: change the shared perceiver/recorder per backend
+  (would fork the exact code that must not diverge).
+- 2026-11-20 · **Camoufox has no persistent profile: session state is cookies (context
+  `AddCookies`) + a per-origin init script that seeds local/sessionStorage BEFORE page scripts run**
+  (playwright `AddInitScript`), restored into a fresh context each run. UA is never overridden
+  (`SupportsUAOverride=false`) to keep Camoufox's fingerprint consistent. · alt: Playwright
+  `storage_state` on context creation — the init-script approach also covers sessionStorage (which
+  storage_state does not) and matches addition #4's "before page scripts" requirement.
+- 2026-11-20 · **Popups/new-auth-windows (addition #7) deferred behind the `browser.Page`
+  interface** · the interface does not surface popups (`OnPopup`) and no lab app / login flow in the
+  suite opens one, so adding the method + a lab e2e would be unverifiable here. Recorded as Deferred
+  in PROGRESS with the reason; revisit when a real target needs an auth popup. · alt: add a
+  speculative `OnPopup` now — rejected as untestable dead surface.

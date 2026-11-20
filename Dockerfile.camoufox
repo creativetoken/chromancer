@@ -1,0 +1,37 @@
+# Camoufox backend runtime: Linux + Xvfb + x11vnc/noVNC + pinned camoufox/playwright,
+# plus the agentbrowser binary. Build:  docker build -f Dockerfile.camoufox -t agentbrowser-camoufox .
+#
+# Version pinning contract (keep aligned or the backend fails its startup check):
+#   CAMOUFOX_VERSION   -> pulls a specific Playwright
+#   PLAYWRIGHT_VERSION == internal/browser/camoufox/version.go PlaywrightVersion
+#                      == the playwright-go module version in go.mod (v0.MMmm.patch)
+ARG GO_VERSION=1.27
+ARG DEBIAN=bookworm
+
+# --- build the Go binary ---
+FROM golang:${GO_VERSION}-${DEBIAN} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/agentbrowser ./cmd/agentbrowser
+
+# --- runtime with Camoufox + virtual display + VNC ---
+FROM python:3.12-${DEBIAN}
+ARG CAMOUFOX_VERSION=0.4.11
+ARG PLAYWRIGHT_VERSION=1.52.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb x11vnc novnc websockify \
+      libgtk-3-0 libx11-xcb1 libdbus-glib-1-2 libasound2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinned Camoufox + Playwright, and the Camoufox browser build baked into the image.
+RUN pip install --no-cache-dir "camoufox[geoip]==${CAMOUFOX_VERSION}" "playwright==${PLAYWRIGHT_VERSION}" \
+    && python -m camoufox fetch
+
+COPY --from=build /out/agentbrowser /usr/local/bin/agentbrowser
+
+ENV AGENTBROWSER_BACKEND=camoufox
+# python3 (the image default) already has camoufox + playwright importable.
+ENTRYPOINT ["/usr/local/bin/agentbrowser"]

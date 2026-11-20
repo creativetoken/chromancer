@@ -90,6 +90,10 @@ type Page interface {
 	SelectOption(ctx context.Context, el Element, value string) error
 	PressEnter(ctx context.Context, el Element) error
 	Back(ctx context.Context) error
+	// ExpectPopup runs trigger (an action that opens a new tab/window, e.g. a
+	// login or magic link that opens in a popup) and returns the Page that opens,
+	// bounded by timeout.
+	ExpectPopup(ctx context.Context, trigger func() error, timeout time.Duration) (Page, error)
 	Close() error
 	Subscribe(ctx context.Context, sink NetworkSink) (cancel func())
 	ExportState(ctx context.Context) (SessionState, error)

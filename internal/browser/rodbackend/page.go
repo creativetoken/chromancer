@@ -293,6 +293,43 @@ func (p *rodPage) PressEnter(ctx context.Context, e browser.Element) error {
 	return el.Type(input.Enter)
 }
 
+// ExpectPopup runs trigger and returns the new page it opens (login/magic-link
+// popups), bounded by timeout. The new tab is set up like NewPage (UA + Network).
+func (p *rodPage) ExpectPopup(ctx context.Context, trigger func() error, timeout time.Duration) (browser.Page, error) {
+	// WaitOpen is bound to the parent page's own (long-lived) context; the
+	// timeout is gated with a timer so the popup we return is NOT tied to a ctx
+	// that gets cancelled when this call returns.
+	wait := p.rp.WaitOpen()
+	if err := trigger(); err != nil {
+		return nil, err
+	}
+	type res struct {
+		pg  *rod.Page
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		np, err := wait()
+		ch <- res{np, err}
+	}()
+	select {
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("browser: expect popup: timed out after %s", timeout)
+	case <-ctx.Done():
+		return nil, fmt.Errorf("browser: expect popup: %w", ctx.Err())
+	case r := <-ch:
+		if r.err != nil {
+			return nil, fmt.Errorf("browser: expect popup: %w", r.err)
+		}
+		if r.pg == nil {
+			return nil, fmt.Errorf("browser: expect popup: no page opened")
+		}
+		_ = p.b.applyUA(r.pg)
+		_ = (proto.NetworkEnable{}).Call(r.pg)
+		return &rodPage{rp: r.pg.Context(ctx), b: p.b}, nil
+	}
+}
+
 // Back navigates history back.
 func (p *rodPage) Back(ctx context.Context) error {
 	if err := p.rp.Context(ctx).NavigateBack(); err != nil {

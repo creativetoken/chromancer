@@ -329,6 +329,25 @@ func (p *cfPage) PressEnter(ctx context.Context, e browser.Element) error {
 	return nil
 }
 
+// ExpectPopup runs trigger and returns the popup Page it opens (login/magic-link
+// in a new window), bounded by timeout. The popup inherits the account context.
+func (p *cfPage) ExpectPopup(ctx context.Context, trigger func() error, timeout time.Duration) (browser.Page, error) {
+	tmo := float64(timeout / time.Millisecond)
+	var np pw.Page
+	err := p.run(ctx, func() error {
+		pg, e := p.pg.ExpectPopup(func() error { return trigger() }, pw.PageExpectPopupOptions{Timeout: &tmo})
+		np = pg
+		return e
+	})
+	if err != nil {
+		return nil, fmt.Errorf("camoufox: expect popup: %w", err)
+	}
+	if np == nil {
+		return nil, fmt.Errorf("camoufox: expect popup: no page opened")
+	}
+	return &cfPage{pg: np, bctx: p.bctx, b: p.b}, nil
+}
+
 func (p *cfPage) Back(ctx context.Context) error {
 	if err := p.run(ctx, func() error { _, e := p.pg.GoBack(pw.PageGoBackOptions{Timeout: timeoutMs(ctx)}); return e }); err != nil {
 		return fmt.Errorf("camoufox: back: %w", err)

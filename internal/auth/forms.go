@@ -243,18 +243,25 @@ func (a actor) bound(ctx context.Context) (context.Context, context.CancelFunc) 
 }
 
 func (a actor) typeInto(ctx context.Context, n *perceive.Node, text, label string) error {
-	cctx, cancel := a.bound(ctx)
+	// Typing a one-time code can need more than the generic step budget: the
+	// field may resist programmatic focus/input and fall back to a click + direct
+	// value-set. Give it a dedicated, larger window so the fallback is not starved.
+	to := a.d.Timeout
+	if to < 20*time.Second {
+		to = 20 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
 	fr, err := perceive.FrameOf(cctx, a.d.Page, *n)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s field: locate frame: %w", label, err)
 	}
 	el, err := a.d.Page.Element(cctx, fr, perceive.Selector(n.Handle), a.d.Timeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s field: resolve element [handle %d, frame %d]: %w", label, n.Handle, n.Frame, err)
 	}
 	if err := a.d.Page.TypeInto(cctx, el, text); err != nil {
-		return err
+		return fmt.Errorf("%s field: type into [handle %d]: %w", label, n.Handle, err)
 	}
 	a.d.Log("action", map[string]any{"kind": "type", "handle": n.Handle, "field": label, "frame": n.Frame})
 	return nil

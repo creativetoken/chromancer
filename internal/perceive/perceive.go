@@ -231,7 +231,7 @@ type frameOut struct {
 // walkJS enumerates interactive elements, computes accessible names, tags each
 // with data-ab-handle starting at `base`, and returns JSON.
 const walkJS = `(base, frameIndex) => {
-  const sel = 'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="switch"], [contenteditable="true"], summary, [onclick], canvas';
+  const sel = 'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="switch"], [contenteditable="true"], summary, [onclick], canvas, [role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]';
   const els = Array.from(document.querySelectorAll(sel));
   const seen = new Set();
   const txt = (el) => (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
@@ -285,7 +285,7 @@ const walkJS = `(base, frameIndex) => {
       maxlength: (function(){ const m = parseInt(el.getAttribute('maxlength'), 10); return (m > 0 && m <= 64) ? m : 0; })(),
       disabled: !!el.disabled,
       visible: vis,
-      text: (tag === 'a' || tag === 'button' || el.getAttribute('role') === 'button') ? txt(el).slice(0, 120) : ''
+      text: (tag === 'a' || tag === 'button' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'alert' || el.getAttribute('role') === 'status' || el.hasAttribute('aria-live')) ? txt(el).slice(0, 200) : ''
     });
     h++;
   }

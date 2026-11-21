@@ -303,3 +303,20 @@
   suite opens one, so adding the method + a lab e2e would be unverifiable here. Recorded as Deferred
   in PROGRESS with the reason; revisit when a real target needs an auth popup. · alt: add a
   speculative `OnPopup` now — rejected as untestable dead surface.
+- 2026-11-20 · **Camoufox validated live on arm64 Linux (Docker); exact pinned versions** ·
+  running on this host's Docker (Linux aarch64, no native Xvfb on the macOS host). Confirmed working
+  set: **camoufox 0.5.9** (pip `camoufox[geoip]`), **playwright 1.61.0** (camoufox allows `<1.63`;
+  pinned to 1.61 to match the Go client), **playwright-go `github.com/mxschmitt/playwright-go`
+  v0.6100.0** (Playwright 1.61.0; `PlaywrightVersion=1.61.0`), **Camoufox browser build
+  v158.0.1-beta.41** (`camoufox fetch`, ~1.3 GB, arm64), plus the GeoIP AIO + fingerprint-generator
+  model datasets. The earlier 0.4.11/1.52.0 pins were pre-live guesses; these are the validated
+  ones. The deferral above (popups) is now DONE — `ExpectPopup` is implemented and the popup-login
+  lab e2e passes on chromium (and on camoufox in the container). · alt: relax the version-match check
+  to allow a client one minor behind the 1.62 server — rejected; exact-match via pinning is safer.
+- 2026-11-20 · **B0 bot-detection measurement uses dedicated bot-detection TEST pages** (the brief
+  left `<SITE 1..3>` unfilled) · `arh.antoinevastel.com/bots/areyouheadless`, `bot.sannysoft.com`,
+  `abrahamjuliot.github.io/creepjs` — purpose-built, ethical to load (page only, no submission), and
+  each gives a clear per-page verdict. Note: from a datacenter IP (Docker), IP-reputation checks will
+  flag both engines regardless of fingerprint; B0 measures fingerprint/headless evasion, not IP. · alt:
+  real production login pages — rejected (no defined targets, and hammering third-party logins is out
+  of scope for a measurement).

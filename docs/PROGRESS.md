@@ -2,16 +2,26 @@ Status: in progress — agent default
 
 ## Live validation + agent-default push (2026-11-21)
 Working through the agent-default plan (see DECISIONS.md for choices):
-- [x] Success-detector fix: consent/CDN/CSRF cookies no longer fake a login
-  (commit 537e27b). Cold bambulab agent run now ends in failed/human, not done.
-- [x] Trace emitted on failure (agent_takeover steps) for diagnosing live runs.
-- [~] Step 2: warm agent run on https://bambulab.com/en-gb/sign-in. Agent fills
-  the combined email+password form and reaches the email-OTP step, but has not
-  yet completed the code step within the 3-min budget. Verification FETCH is
-  proven working (live GetCode returns the code; funnel fetched/alias/newer/
-  extracted all pass). Diagnosis + lab repro in progress. Live attempts used: 1/5.
-- [ ] Step 3: flip default to agent + PR (gated on step 2 + lab e2e both backends).
-- [ ] Step 4: icon-only sign-in controls (feat/icon-signin).
+- [x] Step 1: cold bambulab agent run ends in failed/human, not a false `done`
+  (success-detector fix, commit 537e27b). Session restored.
+- [~] Step 2: warm agent runs on https://bambulab.com/en-gb/sign-in. The agent
+  dismisses consent, fills email+password, submits, and reaches the email-OTP
+  step every time. Fixed three bugs found here (all with lab repros + tests):
+  success-detector false positive; verification claim lockout (unclaim on failed
+  entry); guarded one-time-code typing (TypeInto click + value-set fallback,
+  TestE2ECombinedVerifyGuarded). **NOT confirmed live**: entry into bambulab's
+  real code field times out at the element/type stage (attempt #3); stage
+  diagnostics + 20s entry budget added but attempt #4 was **rate-limited** (no
+  OTP email delivered after 4 logins in ~50 min). Stopped at 4/5 live attempts
+  per the live-site rate-limit rule. Session restored. See docs/eval/agent-only.md.
+- [~] Step 3: CLI default flipped to --auth-driver agent (deterministic selectable
+  + deprecated, README updated). PR opened feat/agent-only -> main. **Merge is
+  HELD**: the gate requires step 2 to pass live, which it did not (rate-limited +
+  OTP-entry gap). PR left open with the reason documented; proceeding to step 4.
+- [ ] Step 4: icon-only sign-in controls (feat/icon-signin) — new branch off
+  feat/agent-only. Includes the live OTP-entry element/type-stage diagnosis as a
+  follow-up (the field resists rod element ops; needs perceiver/executor work).
+- [ ] Step 5: finalize docs + PROGRESS "Status: complete".
 
 # Agent-only refactor (remove deterministic drivers; an LLM agent decides every step)
 > Branch `feat/agent-only` off `pre-agent-only` tag. Baseline eval: docs/eval/pre-agent-only.md.

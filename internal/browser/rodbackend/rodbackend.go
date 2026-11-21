@@ -35,7 +35,7 @@ type rodBrowser struct {
 // recentStableChromeMajor is the newest Chrome stable milestone known when this
 // was written (2026-11). It is only a yardstick for the "far behind stable"
 // warning — being behind it is not an error, and the number need not be exact.
-const recentStableChromeMajor = 142
+const recentStableChromeMajor = 158
 
 // staleChromeThreshold is how many milestones behind recentStableChromeMajor the
 // running Chromium may be before Launch logs a warning. Chrome ships ~one

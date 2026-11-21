@@ -23,6 +23,10 @@ import (
 // against a lab app, using the deterministic lab policy as the model. It returns
 // the result and error without failing the test so negative cases can assert.
 func (h *harness) runAgentPrimary(t *testing.T, app string, creds identity.Credentials, policy *lab.PolicyModel, v verify.Provider) (handback.Result, error) {
+	return h.runAgentPrimaryMode(t, app, auth.Login, creds, policy, v)
+}
+
+func (h *harness) runAgentPrimaryMode(t *testing.T, app string, mode auth.Mode, creds identity.Credentials, policy *lab.PolicyModel, v verify.Provider) (handback.Result, error) {
 	t.Helper()
 	e := h.expect(app)
 	ws := filepath.Join(h.ws, app)
@@ -50,7 +54,7 @@ func (h *harness) runAgentPrimary(t *testing.T, app string, creds identity.Crede
 		Capture:    handback.CaptureWindow{N: 3, T: 5 * time.Second},
 		EntryCache: filepath.Join(ws, "cache"), Timeout: 8 * time.Second,
 	}
-	return authr.Run(h.ctx, h.b, auth.Login, auth.Hints{LoginURL: e.LoginURL})
+	return authr.Run(h.ctx, h.b, mode, auth.Hints{LoginURL: e.LoginURL, SignupURL: e.SignupURL})
 }
 
 func assertPrimarySucceeded(t *testing.T, res handback.Result, policy *lab.PolicyModel, password string) {
@@ -96,6 +100,64 @@ func TestE2EAgentPrimaryPasswordApps(t *testing.T) {
 			assertPrimarySucceeded(t, res, policy, e.Password)
 		})
 	}
+}
+
+// TestE2EAgentPrimaryVerifierApps runs the agent-primary driver across the lab
+// apps that require a verification step (email code, SMS, magic link, TOTP),
+// wiring a lab-inbox + TOTP verifier so the enter_verification tool can fetch the
+// code/link. The lab policy infers the channel from the page.
+func TestE2EAgentPrimaryVerifierApps(t *testing.T) {
+	skipUnlessE2E(t)
+	cases := []struct {
+		app      string
+		addr     string // inbox address the code/link is delivered to
+		password string // "" for passwordless
+		totpSeed string
+	}{
+		{"otp-sms", lab.PhoneFor, lab.DefaultPass, ""},
+		{"magic-link", lab.DefaultUser, "", ""}, // passwordless email link
+		{"totp", "", lab.DefaultPass, lab.TOTPSeed},
+		{"combined-verify", lab.DefaultUser, lab.DefaultPass, ""},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.app, func(t *testing.T) {
+			h := newHarness(t)
+			e := h.expect(c.app)
+			addr := c.addr
+			inbox := verify.NewLabInbox(h.ts.URL, func(string) string { return addr })
+			inbox.Poll = 150 * time.Millisecond
+			var v verify.Provider = inbox
+			if c.totpSeed != "" {
+				seed := c.totpSeed
+				v = verify.Chain{inbox, verify.NewTOTP(func(string) string { return seed })}
+			}
+			policy := lab.NewPolicyModel()
+			creds := identity.Credentials{UsernameOrEmail: e.Username, Password: c.password, Phone: lab.PhoneFor, TOTPSeed: c.totpSeed}
+			res, err := h.runAgentPrimary(t, c.app, creds, policy, v)
+			if err != nil {
+				t.Fatalf("agent-primary %s should succeed: %v (trace %+v)", c.app, err, res.Trace)
+			}
+			assertPrimarySucceeded(t, res, policy, c.password)
+			if len(res.Trace.Verification) == 0 {
+				t.Errorf("%s: expected a verification step in the trace: %+v", c.app, res.Trace)
+			}
+		})
+	}
+}
+
+func TestE2EAgentPrimarySignupVerify(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	inbox := verify.NewLabInbox(h.ts.URL, func(string) string { return lab.DefaultUser })
+	inbox.Poll = 150 * time.Millisecond
+	policy := lab.NewPolicyModel()
+	creds := identity.Credentials{UsernameOrEmail: lab.DefaultUser, Password: lab.DefaultPass}
+	res, err := h.runAgentPrimaryMode(t, "signup-verify", auth.Signup, creds, policy, inbox)
+	if err != nil {
+		t.Fatalf("agent-primary signup-verify should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, lab.DefaultPass)
 }
 
 func TestE2EAgentPrimarySimple(t *testing.T) {

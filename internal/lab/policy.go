@@ -159,6 +159,13 @@ func (p *PolicyModel) decide(o observation, avail map[string]bool) act {
 		return a
 	}
 
+	// 6b. Signup form (a second/confirm password, or a register-style submit) →
+	// fill_signup_form, which also submits.
+	if o.signupForm && has("fill_signup_form") {
+		p.checks = 0
+		return act{"action": "fill_signup_form", "why": "fill the registration form"}
+	}
+
 	// 7. Login form present.
 	if pw := o.passwordField; pw != nil {
 		if o.loginFilled || pw.filled {
@@ -243,6 +250,7 @@ type observation struct {
 	loggedInHint     bool
 	asksForCode      bool
 	credsRejected    bool
+	signupForm       bool
 	wantLink         bool
 	channel          string
 	needsResendFirst bool
@@ -273,7 +281,7 @@ var (
 	codeAskRe   = regexp.MustCompile(`(?i)(verification code|enter the code|one-?time (code|password)|security code|we (emailed|sent|texted)|check your (email|phone|inbox)|authenticator|6-digit)`)
 	linkAskRe   = regexp.MustCompile(`(?i)(magic link|sign-?in link|click the link|we emailed you a link|open the link)`)
 	smsRe       = regexp.MustCompile(`(?i)(sms|text message|your phone|phone number|texted)`)
-	totpRe      = regexp.MustCompile(`(?i)(authenticator|authentication app|totp|google authenticator|authy)`)
+	totpRe      = regexp.MustCompile(`(?i)(authenticator|authentication app|authentication code|totp|google authenticator|authy)`)
 	codeFieldRe = regexp.MustCompile(`(?i)(code|otp|one-?time|verification|passcode|2fa|mfa)`)
 	resendRe    = regexp.MustCompile(`(?i)(resend|send (a |another )?(new )?code|didn'?t (get|receive))`)
 	noCodeYetRe = regexp.MustCompile(`(?i)(resend|didn'?t (get|receive)|haven'?t received|request a (new )?code)`)
@@ -281,6 +289,7 @@ var (
 	primaryRe   = regexp.MustCompile(`(?i)^(continue.*|proceed.*|confirm.*|trust this device|got it|next|verify|yes.*|allow.*|i agree.*|accept.*)$`)
 	avoidRe     = regexp.MustCompile(`(?i)(delete|remove|close account|deactivate|cancel|log ?out|sign ?out)`)
 	openerRe    = regexp.MustCompile(`(?i)^(sign ?in|log ?in|login|enter|members?( area| portal)?|get started|my account|account)$`)
+	registerRe  = regexp.MustCompile(`(?i)(create account|create an account|sign ?up|register|join( now)?)`)
 	// credRejectRe matches a hard credentials rejection (wrong password / unknown
 	// account), as opposed to a transient "something went wrong, try again".
 	credRejectRe = regexp.MustCompile(`(?i)(incorrect|invalid|wrong|not ?recogni[sz]ed|bad)[^.]{0,24}(password|e-?mail|username|credential|login|account)|invalid credentials|(password|e-?mail|username)[^.]{0,24}(incorrect|invalid|wrong)`)
@@ -316,11 +325,13 @@ func parseObservation(obs string) observation {
 	o.credsRejected = credRejectRe.MatchString(o.title + " " + o.message)
 	o.wantLink = linkAskRe.MatchString(hay)
 	o.needsResendFirst = noCodeYetRe.MatchString(hay) && !codeAlreadySent(hay)
+	// SMS/phone cues win over generic 2FA wording (an SMS page may also say
+	// "two-step verification"); then an explicit authenticator cue; else email.
 	switch {
-	case totpRe.MatchString(hay):
-		o.channel = "totp"
 	case smsRe.MatchString(hay):
 		o.channel = "sms"
+	case totpRe.MatchString(hay):
+		o.channel = "totp"
 	default:
 		o.channel = "email"
 	}
@@ -386,6 +397,22 @@ func parseObservation(obs string) observation {
 	if captchaRe.MatchString(hay) && !o.botWall {
 		o.hasCaptchaWidget = true
 	}
+	// A registration form: a second/confirm password field, or a register-style
+	// submit button, alongside a password field. Distinguishes signup from login
+	// so the agent fills (and submits) via fill_signup_form.
+	pwCount := 0
+	for i := range o.elems {
+		if o.elems[i].typ == "password" {
+			pwCount++
+		}
+	}
+	registerBtn := false
+	for i := range o.elems {
+		if isButton(&o.elems[i]) && registerRe.MatchString(o.elems[i].name) {
+			registerBtn = true
+		}
+	}
+	o.signupForm = o.passwordField != nil && (pwCount >= 2 || registerBtn)
 	// Choose the form's submit control from the candidate buttons, preferring a
 	// real type=submit over a same-named type=button (e.g. a modal's header "Sign
 	// in" opener vs the form's submit), then a submit-worded button, then any.

@@ -112,6 +112,15 @@ func (p *PolicyModel) decide(o observation, avail map[string]bool) act {
 		return act{"action": "check_logged_in", "why": "a logout control is present; confirm the session"}
 	}
 
+	// 2b. A hard credentials rejection after we have already submitted → give up.
+	// Do NOT retry wrong credentials (a transient "try again" is not a rejection
+	// and is handled by the normal re-fill path below).
+	if o.credsRejected && p.calls > 1 {
+		if has("give_up") {
+			return act{"action": "give_up", "why": "credentials rejected", "reason": "the site rejected the credentials"}
+		}
+	}
+
 	// 3. CAPTCHA widget → solve via the tool.
 	if has("solve_captcha") && o.hasCaptchaWidget {
 		return act{"action": "solve_captcha", "why": "a CAPTCHA is present on this page"}
@@ -224,6 +233,7 @@ type observation struct {
 	consentBanner    bool
 	loggedInHint     bool
 	asksForCode      bool
+	credsRejected    bool
 	wantLink         bool
 	channel          string
 	needsResendFirst bool
@@ -259,6 +269,9 @@ var (
 	submitRe    = regexp.MustCompile(`(?i)^(log ?in|sign ?in|submit|continue|next|verify|confirm)$`)
 	primaryRe   = regexp.MustCompile(`(?i)^(continue.*|proceed.*|confirm.*|trust this device|got it|next|verify|yes.*|allow.*|i agree.*|accept.*)$`)
 	avoidRe     = regexp.MustCompile(`(?i)(delete|remove|close account|deactivate|cancel|log ?out|sign ?out)`)
+	// credRejectRe matches a hard credentials rejection (wrong password / unknown
+	// account), as opposed to a transient "something went wrong, try again".
+	credRejectRe = regexp.MustCompile(`(?i)(incorrect|invalid|wrong|not ?recogni[sz]ed|bad)[^.]{0,24}(password|e-?mail|username|credential|login|account)|invalid credentials|(password|e-?mail|username)[^.]{0,24}(incorrect|invalid|wrong)`)
 )
 
 func parseObservation(obs string) observation {
@@ -285,6 +298,7 @@ func parseObservation(obs string) observation {
 	o.botWall = botWallRe.MatchString(hay)
 	o.consentBanner = consentRe.MatchString(hay) && hasConsentButton(o.elems)
 	o.asksForCode = codeAskRe.MatchString(hay)
+	o.credsRejected = credRejectRe.MatchString(hay)
 	o.wantLink = linkAskRe.MatchString(hay)
 	o.needsResendFirst = noCodeYetRe.MatchString(hay) && !codeAlreadySent(hay)
 	switch {

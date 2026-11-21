@@ -10,9 +10,18 @@ Status: in progress — agent-only
       - [x] tool plumbing in `internal/explore` (FillLoginForm/FillSignupForm/DismissBanner callbacks,
             schema gating, applyAction dispatch, test) — commit 9591802
       - [x] auth-side callbacks wired into runAgent (agentFillLoginForm/FillSignupForm/DismissBanner) — 3f0efbd
-      - [ ] make the Explorer the PRIMARY auth driver (new agent-primary runner replacing the deterministic
-            `resolve` loop + handlers + entry finder); then DELETE FlowHandler/DefaultHandlers/MultiStepHandler/
-            SignupHandler orchestration, the rules-based entry finder + path probing, and the resolve loop
+      - [x] test-only lab-policy model (`internal/lab/policy.go`, `testing.Testing()`-guarded): reads the
+            OBSERVATION, returns one action/step; drives the whole lab auth surface + basic crawl. Unit-tested.
+      - [x] agent-primary auth runner (`Authenticator.AuthDriver = AuthDriverAgent` → `runAgentPrimary`):
+            Explorer is the SOLE driver from the entry page (no entry-finder/handlers/resolve loop). Shared
+            `buildAgentExplorer`; `prompts/auth_system.md`; success only via check_logged_in; bot-wall → human;
+            wrong creds → credentials_rejected (no retries). e2e (lab policy, chromium): simple, trust-device,
+            terms-modal, injection-blocked, resend-OTP, wrong-password, bot-wall all green. Deterministic path
+            untouched (AuthDriver defaults to deterministic; existing takeover e2e still green).
+      - [ ] run the agent-primary suite on the camoufox backend too; expand to the rest of the lab auth apps
+            (multistep/modal/iframe/spa-jwt/hidden-entry/magic-link/otp-sms/totp/form-errors/captcha/signup)
+      - [ ] then DELETE FlowHandler/DefaultHandlers/MultiStepHandler/SignupHandler orchestration, the
+            rules-based entry finder + path probing, and the resolve loop (only after full lab e2e both backends)
       - [ ] crawl: drop bfs/hybrid, keep the single llm loop; `--driver` accepted-but-ignored (deprecation warn)
       - [ ] recipe replay → hint in the agent's first observation ("last successful path: …")
 - [ ] 2. One agent loop for auth + crawl (prompts/auth_system.md, prompts/crawl_system.md; --prompt). Escalation

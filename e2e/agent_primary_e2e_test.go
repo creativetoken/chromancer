@@ -1,0 +1,177 @@
+package e2e
+
+import (
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/creativetoken/chromancer/internal/audit"
+	"github.com/creativetoken/chromancer/internal/auth"
+	"github.com/creativetoken/chromancer/internal/core"
+	"github.com/creativetoken/chromancer/internal/handback"
+	"github.com/creativetoken/chromancer/internal/identity"
+	"github.com/creativetoken/chromancer/internal/lab"
+	"github.com/creativetoken/chromancer/internal/model"
+	"github.com/creativetoken/chromancer/internal/perceive"
+	"github.com/creativetoken/chromancer/internal/verify"
+)
+
+// runAgentPrimary drives the Authenticator in AGENT-PRIMARY mode (the LLM agent
+// is the sole driver, no deterministic entry-finder/handlers/resolve loop)
+// against a lab app, using the deterministic lab policy as the model. It returns
+// the result and error without failing the test so negative cases can assert.
+func (h *harness) runAgentPrimary(t *testing.T, app string, creds identity.Credentials, policy *lab.PolicyModel, v verify.Provider) (handback.Result, error) {
+	t.Helper()
+	e := h.expect(app)
+	ws := filepath.Join(h.ws, app)
+	var key [32]byte
+	key[0] = byte(len(app) + 11)
+	red := audit.NewRedactor()
+	red.AddSecret(creds.Password)
+	al, err := audit.OpenFile(filepath.Join(ws, "audit.jsonl"), red)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { al.Close() })
+	router := &model.StaticRouter{Default: model.NewMock(func(string) string { return `{"handle":0,"reason":"mock"}` })}
+	authr := &auth.Authenticator{
+		Target: e.Root, Account: app, Creds: creds,
+		Perceiver: perceive.New(), Router: router,
+		Sessions: &auth.FileSessionStore{Path: filepath.Join(ws, "session.enc"), Key: &key},
+		Writer:   &handback.FileWriter{Dir: filepath.Join(ws, "artefacts"), Account: app},
+		Audit:    al, Budget: core.NewBudget(core.Limits{Time: 180 * time.Second}),
+		Verifier:   v,
+		Agent:      policy,
+		AuthDriver: auth.AuthDriverAgent,
+		Recovery:   auth.RecoveryAgent,
+		Handoff:    nil, // no human: a dead end must fail, not block
+		Capture:    handback.CaptureWindow{N: 3, T: 5 * time.Second},
+		EntryCache: filepath.Join(ws, "cache"), Timeout: 8 * time.Second,
+	}
+	return authr.Run(h.ctx, h.b, auth.Login, auth.Hints{LoginURL: e.LoginURL})
+}
+
+func assertPrimarySucceeded(t *testing.T, res handback.Result, policy *lab.PolicyModel, password string) {
+	t.Helper()
+	if len(res.Trace.SuccessEvidence) == 0 {
+		t.Errorf("expected success evidence (check_logged_in gate): %+v", res.Trace)
+	}
+	if policy.Calls() == 0 {
+		t.Errorf("expected the agent policy to have driven the flow")
+	}
+	if res.Trace.EntrypointHow != "agent" {
+		t.Errorf("expected agent entrypoint, got %q", res.Trace.EntrypointHow)
+	}
+	if password != "" {
+		// The agent-primary trace must never contain the real password.
+		for _, line := range res.Trace.AgentTakeover {
+			if strings.Contains(line, password) {
+				t.Fatalf("password leaked into the agent trace: %q", line)
+			}
+		}
+	}
+}
+
+func TestE2EAgentPrimarySimple(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("simple")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "simple", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+	if err != nil {
+		t.Fatalf("agent-primary simple login should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, e.Password)
+}
+
+func TestE2EAgentPrimaryTrustDevice(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("takeover-trust")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "takeover-trust", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+	if err != nil {
+		t.Fatalf("agent-primary trust-device should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, e.Password)
+}
+
+func TestE2EAgentPrimaryTermsModal(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("takeover-terms")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "takeover-terms", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+	if err != nil {
+		t.Fatalf("agent-primary terms-modal should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, e.Password)
+}
+
+func TestE2EAgentPrimaryInjectionBlocked(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("takeover-injection")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "takeover-injection", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+	if err != nil {
+		t.Fatalf("agent-primary injection should still complete the legit login: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, e.Password)
+	if h.lab.TakeoverDeleted() {
+		t.Fatal("deny-list FAILED: the injected delete-account action was executed")
+	}
+}
+
+func TestE2EAgentPrimaryResendOTP(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("takeover-resend")
+	inbox := verify.NewLabInbox(h.ts.URL, func(string) string { return e.Username })
+	inbox.Poll = 150 * time.Millisecond
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "takeover-resend", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, inbox)
+	if err != nil {
+		t.Fatalf("agent-primary resend-OTP should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, e.Password)
+	if len(res.Trace.Verification) == 0 {
+		t.Errorf("expected a verification step in the trace: %+v", res.Trace)
+	}
+}
+
+func TestE2EAgentPrimaryWrongPassword(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("simple")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "simple",
+		identity.Credentials{UsernameOrEmail: e.Username, Password: "definitely-wrong-password"}, policy, nil)
+	if err == nil {
+		t.Fatalf("a wrong password must fail: %+v", res.Trace)
+	}
+	if !errors.Is(err, auth.ErrCredentialsRejected) {
+		t.Errorf("expected credentials_rejected, got %v (reason=%s)", err, auth.FailReason(err))
+	}
+}
+
+func TestE2EAgentPrimaryBotWallFails(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("takeover-botwall")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "takeover-botwall", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+	if err == nil {
+		t.Fatalf("a bot-wall with no human handoff must fail, not complete: %+v", res.Trace)
+	}
+	// The agent drove (so it saw the wall) but did not authenticate; with no human
+	// handoff configured the bot-wall surfaces as a failure rather than a login.
+	if policy.Calls() == 0 {
+		t.Errorf("expected the agent to have driven up to the bot-wall")
+	}
+	if errors.Is(err, auth.ErrCredentialsRejected) {
+		t.Errorf("a bot-wall is not a credentials rejection: %v", err)
+	}
+}

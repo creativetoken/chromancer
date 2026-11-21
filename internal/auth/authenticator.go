@@ -52,6 +52,10 @@ type Authenticator struct {
 	// handoff tools) before falling back to a human.
 	Agent    explore.LLMModel
 	Recovery RecoveryMode
+	// AuthDriver selects deterministic (default) or agent-primary sign-in. In
+	// agent-primary mode the LLM agent drives the whole flow from the entry page
+	// and the deterministic entry-finder/handlers/resolve loop are not used.
+	AuthDriver AuthDriver
 	// OnRecovering, if set, is called when the agent takes over (step 0) and on
 	// each subsequent agent step, so a control surface can expose a
 	// recovering{step,reason} state. Optional.
@@ -155,6 +159,11 @@ func (a *Authenticator) tryRestore(ctx context.Context, p browser.Page, rec *han
 }
 
 func (a *Authenticator) authenticate(ctx context.Context, p browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
+	// Agent-primary: the LLM agent drives the whole sign-in from the entry page;
+	// the deterministic entry-finder/handlers/resolve loop below are skipped.
+	if a.AuthDriver == AuthDriverAgent {
+		return a.runAgentPrimary(ctx, p, rec, mode, hints)
+	}
 	// Flow start, captured BEFORE the first form submit. A verification code is
 	// sent when the form is submitted (below), so this is the lower bound for
 	// "code newer than the flow" — set it here, not in resolve (which runs after

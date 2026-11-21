@@ -1,8 +1,23 @@
-Status: complete — camoufox validated live on arm64 Linux (Docker). Full lab e2e passes on BOTH
-backends (chromium `ok` 932s; camoufox `ok` 994s, zero failures). Items 1-6 done: backend logs in on
-Firefox; fingerprint stable per account; token-guarded noVNC handoff view; popups on both backends;
-sidecar restart/idle lifecycle; B0 bot-detection recorded. See the "Camoufox LIVE validation" section
-below and docs/CAMOUFOX.md.
+Status: in progress — agent-only
+
+# Agent-only refactor (remove deterministic drivers; an LLM agent decides every step)
+> Branch `feat/agent-only` off `pre-agent-only` tag. Baseline eval: docs/eval/pre-agent-only.md.
+> The agent-takeover infra (internal/explore Explorer + the auth tool callbacks in auth/takeover.go)
+> already exists — the refactor PROMOTES it from recovery to the PRIMARY (only) driver.
+
+- [x] 0. Baseline: tag `pre-agent-only`, run `agentbrowser eval` (auth + crawl) → docs/eval/pre-agent-only.md
+- [ ] 1. Remove deterministic drivers (auth handlers/entry-finder/resolve orchestration; crawl bfs/hybrid;
+      recipe replay → hint). Keep the helpers as agent **tools**: fill_login_form, fill_signup_form,
+      enter_verification, resend_verification, solve_captcha, request_human, check_logged_in, dismiss_banner.
+- [ ] 2. One agent loop for auth + crawl (prompts/auth_system.md, prompts/crawl_system.md; --prompt). Escalation
+      agent → human → failed{reason}; bot-wall → human; wrong creds → fail. Budgets/loop-detection/no-URL-guess.
+- [ ] 3. Real LLM provider required (fail fast without one; OpenAI-compat/Ollama ok). Cheap vs plan model routing.
+- [ ] 4. Tests: test-only "lab policy" model (reads observation, returns actions; never usable outside tests);
+      all lab e2e pass agent-only; assert no secret reaches the model; optional `live` eval.
+- [ ] 5. Rerun eval with a real provider → docs/eval/agent-only.md; update ARCHITECTURE (ADR superseding 0004),
+      README, CAPTCHA.md, VERIFICATION.md, PROGRESS. Status → complete.
+
+## Camoufox backend (prior task, complete) — see docs/CAMOUFOX.md, tag `camoufox-v1`
 
 # PROGRESS
 

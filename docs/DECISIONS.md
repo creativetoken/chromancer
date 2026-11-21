@@ -320,3 +320,27 @@
   flag both engines regardless of fingerprint; B0 measures fingerprint/headless evasion, not IP. · alt:
   real production login pages — rejected (no defined targets, and hammering third-party logins is out
   of scope for a measurement).
+- 2026-11-21 · **Agent-only architecture: promote the existing agent-takeover loop to the sole
+  driver for auth + crawl** · the `internal/explore` Explorer (LLM driver) already owns the
+  observation/action loop, the Executor (deny-list, secret placeholders, untrusted-DATA fencing,
+  pacing), budgets/loop-detection, and the takeover tool callbacks
+  (`EnterVerification`/`ResendVerification`/`SolveCaptcha`/`CheckLoggedIn`/`RequestHuman`). The
+  refactor REMOVES the deterministic orchestration (auth `FlowHandler`s + `DefaultHandlers` +
+  `MultiStepHandler`/`SignupHandler`, the rules-based entry finder + path probing, the `resolve`
+  loop; crawl `bfs`/`hybrid` drivers; recipe replay) and makes the Explorer the only loop, adding
+  the remaining deterministic helpers as **tools** the agent calls: `fill_login_form(form_id)` /
+  `fill_signup_form(form_id)` (the old form-fill logic via placeholders), `dismiss_banner`
+  (cookie/consent). Success stays gated by `check_logged_in` (the existing SuccessDetector). Auth
+  escalation becomes agent → human → failed{reason}; bot-wall → human; wrong-credentials → fail,
+  no retries — all already in the Executor/takeover policy. · alt: keep deterministic-first with
+  agent fallback (the status quo; the operator wants agent-decides-every-step, and the live
+  Symphony SPA proved the deterministic entry finder is the weak link — `entrypoint_not_found`
+  fails before the agent ever runs).
+- 2026-11-21 · **A real LLM provider is required for auth + crawl; tests use a test-only "lab
+  policy" model** · with no provider configured the CLI/MCP fail fast with a clear message
+  (OpenAI-compatible/Ollama count as providers for local models). The mock echo-model can no
+  longer drive, so tests get a `labPolicyModel` (implements the `Structured` LLM interface, reads
+  the observation and returns sensible lab actions) that lives in a `_test`/internal-lab scope and
+  is never constructible from production code. Model routing: a cheap model for routine steps, the
+  plan model on stuck/recovery, both configurable. · alt: keep the echo mock (can't exercise a
+  real decision loop, so it would not prove the agent-only system).

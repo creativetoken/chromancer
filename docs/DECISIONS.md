@@ -344,3 +344,16 @@
   is never constructible from production code. Model routing: a cheap model for routine steps, the
   plan model on stuck/recovery, both configurable. · alt: keep the echo mock (can't exercise a
   real decision loop, so it would not prove the agent-only system).
+- 2026-11-21 · **Success detection must not treat consent/CDN/CSRF cookies as login proof** ·
+  Live Bambu Lab run (agent driver, real provider): the agent correctly escalated with
+  `request_human` when it could not find the (now icon-only) sign-in, but the "authoritative
+  success gate" (`agentCheckLoggedIn` → `SuccessDetector.IsAuthenticated`, trustStorage=true)
+  overrode it into `status: done` / `replayable: true` and wrote a bogus session. Cause: the
+  cookie heuristic's bare `id$`/`_id` matched the consent cookie `TAconsentID`, and the HTTPOnly
+  branch matched Cloudflare's `cf_clearance`. Fix: dropped the over-broad `id$`/`_id` from
+  `authCookieRe` (real sessions still match sess/sid/auth/token/jwt/login/user/uid) and added a
+  `nonAuthCookieRe` denylist (consent-manager, analytics, CDN/bot-mitigation, CSRF) that can never
+  be `new_auth_cookie` even when HTTPOnly. Test: `TestStorageEvidenceConsentAndCDNCookiesNotAuth`
+  (the exact Bambu logged-out cookie set is not strong; real `token`/`refreshToken` still are). ·
+  alt: trust only `/me` 2xx + authed-element and drop cookie evidence entirely (regresses sites
+  whose only live signal is a freshly-minted opaque session cookie — see the Freshservice test).

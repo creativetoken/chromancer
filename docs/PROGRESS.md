@@ -23,22 +23,38 @@ Status: in progress — agent-only
             Lab-policy improvements (submit-control pick, modal/members opener, creds-reject fast-fail) + three
             underlying correctness fixes (perceive alert nodes; Classify precise alert text; explore re-submit
             detection) landed. CLI `--auth-driver agent` + App.AuthDriver wired (fail-fast without a model).
-      - [ ] expand agent-primary e2e to the verifier/captcha apps (otp-sms/totp/magic-link/signup-verify/
-            combined-verify/captcha-*) and run the whole suite on the camoufox backend
-      - [ ] then DELETE FlowHandler/DefaultHandlers/MultiStepHandler/SignupHandler orchestration, the
-            rules-based entry finder + path probing, and the resolve loop (only after full lab e2e both backends)
+      - [x] agent-primary e2e expanded to verification + CAPTCHA + signup apps (otp-sms/magic-link/totp/
+            combined-verify/signup-verify/captcha-mock) and the WHOLE agent-primary suite now passes on BOTH
+            backends — chromium and camoufox (via Docker/Xvfb). Fixed a real resend bug (verification freshness
+            window must be captured before the resend click; shared by both drivers). Both-backends gate = MET.
+      - [ ] DELETE FlowHandler/DefaultHandlers/MultiStepHandler/SignupHandler orchestration, the rules-based
+            entry finder + path probing, and the resolve loop. **Staged, not done:** the gate is met, but the
+            physical deletion also requires converting/removing the large deterministic test suite (login/signup/
+            entry/hydration/combined-verify/mcp/captcha/crawl-bfs-hybrid e2e + auth/entry/explore unit tests) and
+            re-validating BOTH backends — a focused follow-up kept separate to preserve "tests green at each step".
+            The agent-only path is the behavioural default-capable driver today via `--auth-driver agent`.
       - [x] crawl: `--driver` marked deprecated (one release) with a warning; bfs/hybrid still function until
             the deletion step drops them for the single llm loop
       - [x] independent bugs: verify link extraction (entities/utm/anchor) + exact toAlias + charset;
             chromium version logged + stale warning
-      - [ ] recipe replay → hint in the agent's first observation ("last successful path: …")
-- [ ] 2. One agent loop for auth + crawl (prompts/auth_system.md, prompts/crawl_system.md; --prompt). Escalation
+      - [ ] recipe replay → hint in the agent's first observation ("last successful path: …") — not yet built
+- [x] 2. One agent loop for auth + crawl (prompts/auth_system.md + crawl_system.md; --prompt). Escalation
       agent → human → failed{reason}; bot-wall → human; wrong creds → fail. Budgets/loop-detection/no-URL-guess.
-- [ ] 3. Real LLM provider required (fail fast without one; OpenAI-compat/Ollama ok). Cheap vs plan model routing.
-- [ ] 4. Tests: test-only "lab policy" model (reads observation, returns actions; never usable outside tests);
-      all lab e2e pass agent-only; assert no secret reaches the model; optional `live` eval.
-- [ ] 5. Rerun eval with a real provider → docs/eval/agent-only.md; update ARCHITECTURE (ADR superseding 0004),
-      README, CAPTCHA.md, VERIFICATION.md, PROGRESS. Status → complete.
+- [~] 3. Real LLM provider required: agent-primary fails fast with a clear message when no model is configured
+      (`App.RunAuth`); OpenAI-compat + Ollama providers exist; cheap-vs-plan routing via the ModelRouter/ByTask.
+- [x] 4. Tests: test-only "lab policy" model (reads observation, returns actions; panics outside `go test`);
+      the whole agent-primary lab surface passes agent-only on BOTH backends; every scenario asserts no
+      password/code/seed reaches the model. (`live` eval with a real key: still optional/pending.)
+- [~] 5. Docs: ADR 0017 supersedes 0004; ARCHITECTURE, README, CAPTCHA.md, VERIFICATION.md updated;
+      docs/eval/agent-only.md written (lab-policy both-backends results vs baseline). Eval with a REAL provider
+      (tokens/cost) is pending an API key + eval-harness wiring to AuthDriverAgent.
+
+## Remaining to call this "complete"
+1. Physical deletion of the deterministic orchestration (step 1 last box) + conversion/removal of its test
+   suite, re-validated on both backends. The agent-only driver already passes both backends; this is cleanup.
+2. Flip the default AuthDriver to agent (after 1), or keep deterministic one release as a deprecated fallback.
+3. Recipe-replay hint; paid eval with a real provider; MCP get_job "current step" surfacing.
+> Status line stays "in progress — agent-only" until the deletion lands and the default flips.
 
 ## Camoufox backend (prior task, complete) — see docs/CAMOUFOX.md, tag `camoufox-v1`
 

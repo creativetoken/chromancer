@@ -136,6 +136,17 @@ func (a *Authenticator) runAgent(ctx context.Context, p browser.Page, rec *handb
 			return a.agentSolveCaptcha(c, p)
 		}
 	}
+	// Form-fill + consent tools are always available (they fill via placeholders;
+	// the real values never reach the model, and the model still decides submit).
+	ex.FillLoginForm = func(c context.Context, n *perceive.Node) (string, error) {
+		return a.agentFillLoginForm(c, p, deps, n)
+	}
+	ex.FillSignupForm = func(c context.Context, n *perceive.Node) (string, error) {
+		return a.agentFillSignupForm(c, p, deps, n)
+	}
+	ex.DismissBanner = func(c context.Context) (string, error) {
+		return a.agentDismissBanner(c, p, deps)
+	}
 
 	rep, cerr := ex.Crawl(tctx)
 	a.recordAgentTrace(reason, rep)
@@ -345,4 +356,79 @@ func lastTrace(s []string, n int) []string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// --- agent form-fill + consent tools ---------------------------------------
+// These are the deterministic helpers exposed as tools the agent calls. They
+// fill via actor.typeInto (placeholder path — the real credential never reaches
+// the model), and leave the decision of when to submit to the model.
+
+var (
+	consentRejectRe = regexp.MustCompile(`(?i)(reject|decline|necessary only|only necessary|refuse|deny non)`)
+	consentAcceptRe = regexp.MustCompile(`(?i)(accept|agree|got it|allow all|i understand|^ok$)`)
+)
+
+// agentFillLoginForm fills the current page's login form (identifier + password)
+// without submitting. The model submits with a separate action.
+func (a *Authenticator) agentFillLoginForm(ctx context.Context, p browser.Page, deps FlowDeps, _ *perceive.Node) (string, error) {
+	st := mustPerceive(ctx, a, p)
+	f := Classify(st)
+	if f.Password == nil {
+		return "", fmt.Errorf("no login form (password field) on this page")
+	}
+	act := actor{deps}
+	if f.Identifier != nil && f.Identifier.Value == "" {
+		if err := act.typeInto(ctx, f.Identifier, a.Creds.UsernameOrEmail, "identifier"); err != nil {
+			return "", err
+		}
+	}
+	if err := act.typeInto(ctx, f.Password, a.Creds.Password, "password"); err != nil {
+		return "", err
+	}
+	return "filled username and password; submit when ready", nil
+}
+
+// agentFillSignupForm fills (and submits) the current page's signup form using
+// the existing signup fill logic.
+func (a *Authenticator) agentFillSignupForm(ctx context.Context, p browser.Page, deps FlowDeps, _ *perceive.Node) (string, error) {
+	st := mustPerceive(ctx, a, p)
+	if err := (SignupHandler{}).Run(ctx, st, a.Creds, deps); err != nil {
+		return "", err
+	}
+	return "filled and submitted the signup form", nil
+}
+
+// agentDismissBanner dismisses a cookie/consent banner, preferring the
+// privacy-preserving option (reject non-essential) over accept.
+func (a *Authenticator) agentDismissBanner(ctx context.Context, p browser.Page, deps FlowDeps) (string, error) {
+	st := mustPerceive(ctx, a, p)
+	var reject, accept *perceive.Node
+	for i := range st.Nodes {
+		n := &st.Nodes[i]
+		if n.Tag != "button" && n.Role != "button" && n.Tag != "a" {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(n.Name))
+		if name == "" {
+			continue
+		}
+		if reject == nil && consentRejectRe.MatchString(name) {
+			reject = n
+		}
+		if accept == nil && consentAcceptRe.MatchString(name) {
+			accept = n
+		}
+	}
+	target, label := reject, "rejected non-essential cookies"
+	if target == nil {
+		target, label = accept, "accepted the cookie banner"
+	}
+	if target == nil {
+		return "no cookie/consent banner found", nil
+	}
+	if err := (actor{deps}).click(ctx, target, "consent"); err != nil {
+		return "", err
+	}
+	_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+	return label, nil
 }

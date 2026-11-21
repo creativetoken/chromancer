@@ -165,6 +165,7 @@ func (p *IMAPProvider) GetCode(ctx context.Context, req Request) (Result, error)
 			if p.Claims != nil {
 				p.Claims.Claim(m.id)
 			}
+			res.MsgID = m.id
 			return res, nil
 		}
 		if p.OnScan != nil {
@@ -532,4 +533,13 @@ func stripTags(html string) string {
 		}
 	}
 	return b.String()
+}
+
+// Unclaim releases a claimed Message-ID so a retry can read the same code again
+// (used when the code was fetched but could not be entered). Implements
+// verify.Unclaimer.
+func (p *IMAPProvider) Unclaim(id string) {
+	if p.Claims != nil {
+		p.Claims.Unclaim(id)
+	}
 }

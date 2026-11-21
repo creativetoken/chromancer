@@ -357,3 +357,24 @@
   (the exact Bambu logged-out cookie set is not strong; real `token`/`refreshToken` still are). ·
   alt: trust only `/me` 2xx + authed-element and drop cookie evidence entirely (regresses sites
   whose only live signal is a freshly-minted opaque session cookie — see the Freshservice test).
+- 2026-11-21 · **TypeInto falls back to click + direct value-set for guarded code
+  fields** · Live Bambu Lab agent sign-in reached the email-OTP step, fetched the
+  code (verify funnel confirmed fetched/alias/newer/extracted all pass and live
+  GetCode returns the code), but typing it in hit a "focus timeout": rod's Focus/
+  Input wait for interactability and the OTP field does not accept programmatic
+  key events. Fix: after the normal focus+Input, TypeInto reads back the value;
+  if it did not land, it clicks the field (un-guarding readonly/overlay inputs)
+  and sets the value directly with input/change events. Bounded (3s per step) so
+  a stuck field can't hang verification. Repro: lab app `combined-verify-guarded`
+  (code field readonly until a real click) + `TestE2ECombinedVerifyGuarded`,
+  which FAILS without the fallback and PASSES with it. · alt: set value via JS
+  always (drops real key events many forms validate on — kept as fallback only).
+- 2026-11-21 · **A fetched verification code is unclaimed if it cannot be entered**
+  · The code was claimed on fetch (concurrency dedup), so once entry failed every
+  retry saw it as alreadyClaimed (verify funnel: claimed=1 extracted=0) and the
+  server sent no new code — a permanent lockout. Fix: Result carries MsgID; on an
+  entry failure doVerify rolls the freshness window back and calls Unclaim
+  (ClaimStore.Unclaim, exposed via verify.Unclaimer on IMAP/Twilio and forwarded
+  by Chain), so a retry reads the same code again. Tests: TestClaimUnclaimAllowsRetry,
+  TestChainUnclaimForwards. · alt: claim only after successful entry (loses the
+  cross-wait dedup during the attempt).

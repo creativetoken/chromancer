@@ -47,6 +47,10 @@ type Result struct {
 	Kind ResultKind
 	Code string
 	Link string
+	// MsgID identifies the provider message this result came from (IMAP
+	// Message-ID / Twilio SID). The caller uses it to Unclaim the message if the
+	// code could not be entered, so a retry can read the same code again.
+	MsgID string
 }
 
 // Sentinel errors.
@@ -98,4 +102,20 @@ func (c Chain) Resend(ctx context.Context, req Request) error {
 		}
 	}
 	return ErrUnsupported
+}
+
+// Unclaimer is implemented by providers that claim messages and can release a
+// claim when a fetched code could not be used.
+type Unclaimer interface {
+	Unclaim(id string)
+}
+
+// Unclaim implements Unclaimer: it forwards to every child provider that can
+// release a claim (the id only exists in the one that minted it).
+func (c Chain) Unclaim(id string) {
+	for _, p := range c {
+		if u, ok := p.(Unclaimer); ok {
+			u.Unclaim(id)
+		}
+	}
 }

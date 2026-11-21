@@ -575,13 +575,24 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 		}
 		return fmt.Errorf("%w: verification: %v", ErrFlowFailed, err)
 	}
+	// A fetched code is only truly consumed once it has been entered. If entry
+	// fails, roll the freshness window back and release the provider's claim so a
+	// retry can read the SAME code again (the server may not send another).
+	prevSince := *since
 	*since = time.Now()
+	fetchFailed := func(err error) error {
+		*since = prevSince
+		if u, ok := a.Verifier.(verify.Unclaimer); ok {
+			u.Unclaim(res.MsgID)
+		}
+		return err
+	}
 	ac := actor{deps}
 	switch res.Kind {
 	case verify.ResLink:
 		a.trace.Add("verification: opening magic link")
 		if err := p.Navigate(ctx, res.Link); err != nil {
-			return fmt.Errorf("auth: open magic link: %w", err)
+			return fetchFailed(fmt.Errorf("auth: open magic link: %w", err))
 		}
 	case verify.ResCode:
 		if vs.CodeField == nil {
@@ -591,16 +602,16 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 			vs.CodeField, vs.Submit = nv.CodeField, nv.Submit
 		}
 		if vs.CodeField == nil {
-			return fmt.Errorf("%w: got a code but found no code field", ErrFlowFailed)
+			return fetchFailed(fmt.Errorf("%w: got a code but found no code field", ErrFlowFailed))
 		}
 		a.trace.Add("verification: entering code")
 		if err := ac.typeInto(ctx, vs.CodeField, res.Code, "otp"); err != nil {
-			return err
+			return fetchFailed(err)
 		}
 		f := Classify(mustPerceive(ctx, a, p))
 		if err := ac.submit(ctx, Fields{Submit: vs.Submit}, vs.CodeField); err != nil && f.Submit != nil {
 			if err2 := ac.click(ctx, f.Submit, "verify"); err2 != nil {
-				return err2
+				return fetchFailed(err2)
 			}
 		}
 	case verify.ResApproved:

@@ -91,7 +91,7 @@ func (p *TwilioProvider) GetCode(ctx context.Context, req Request) (Result, erro
 		if err == nil {
 			if m, code, ok := p.pick(ctx, req, msgs, since); ok {
 				p.claim(m.SID)
-				return Result{Kind: ResCode, Code: code}, nil
+				return Result{Kind: ResCode, Code: code, MsgID: m.SID}, nil
 			}
 		}
 		if !resent && p.OnResend != nil && !resendAt.IsZero() && time.Now().After(resendAt) {
@@ -116,6 +116,15 @@ func (p *TwilioProvider) skew() time.Duration {
 func (p *TwilioProvider) claim(sid string) {
 	if p.Claims != nil {
 		p.Claims.Claim(sid)
+	}
+}
+
+// Unclaim releases a claimed SID so a retry can read the same code again (used
+// when the code was fetched but could not be entered). Implements
+// verify.Unclaimer.
+func (p *TwilioProvider) Unclaim(sid string) {
+	if p.Claims != nil {
+		p.Claims.Unclaim(sid)
 	}
 }
 

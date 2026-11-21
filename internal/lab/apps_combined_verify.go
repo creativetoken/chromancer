@@ -23,13 +23,14 @@ import (
 // as a code either, so it can only be detected from structural signals
 // (inputmode=numeric + a short maxlength on a field below the credentials).
 type combinedVerifyApp struct {
-	name   string
-	cookie string
-	intl   bool
-	mu     sync.Mutex
-	sess   Sessions
-	codes  map[string]string // email -> pending code
-	inbox  *Inbox
+	name    string
+	cookie  string
+	intl    bool
+	guarded bool // code field rejects key events until a real click un-guards it
+	mu      sync.Mutex
+	sess    Sessions
+	codes   map[string]string // email -> pending code
+	inbox   *Inbox
 }
 
 func (a *combinedVerifyApp) Name() string { return a.name }
@@ -45,6 +46,9 @@ func (a *combinedVerifyApp) Expect(base string) Expect {
 	notes := "combined email+password+code sign-in (code revealed in place); needs code-step detection with credentials still present"
 	if a.intl {
 		notes = "non-English combined email+password+code form with no code wording; code field detected from inputmode/maxlength alone"
+	}
+	if a.guarded {
+		notes = "combined form whose code field ignores key events until clicked; the code only lands via click + direct value-set (TypeInto's guarded-input fallback)"
 	}
 	return Expect{App: a.name, Flow: "form", Root: base + "/" + a.name + "/", LoginURL: base + "/" + a.name + "/login",
 		LandingURL: base + "/" + a.name + "/app", MeURL: base + "/" + a.name + "/api/me",
@@ -87,6 +91,14 @@ func (a *combinedVerifyApp) form(email, password string, withCode bool, errMsg s
 			// Structural detection only: name/id/placeholder reveal nothing; the
 			// numeric inputmode and 6-char maxlength (below the credentials) carry it.
 			fmt.Fprintf(&b, `<label for="f6">%s</label><input id="f6" name="f6" type="text" inputmode="numeric" maxlength="6" autocomplete="off" required>`,
+				html.EscapeString(lbl["code"]))
+		} else if a.guarded {
+			// The code field silently ignores typed key events until a real click
+			// un-guards it (readonly removed on mousedown). Reproduces real OTP
+			// fields where programmatic focus/typing does not land and only a
+			// click + direct value-set enters the code. A user can still type it
+			// after clicking; the submitted value is honoured either way.
+			fmt.Fprintf(&b, `<label for="code">%s</label><input id="code" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="Verification code" readonly onmousedown="this.removeAttribute('readonly')" required>`,
 				html.EscapeString(lbl["code"]))
 		} else {
 			fmt.Fprintf(&b, `<label for="code">%s</label><input id="code" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="Verification code" required>`,

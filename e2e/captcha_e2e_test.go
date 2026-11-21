@@ -41,6 +41,41 @@ func (h *harness) runCaptcha(t *testing.T, app string, solvers []captcha.Solver,
 	return authr.Run(h.ctx, h.b, auth.Login, auth.Hints{LoginURL: e.LoginURL})
 }
 
+// TestE2EAgentPrimaryCaptchaMock drives captcha-mock entirely with the agent
+// (lab policy): it fills the login form, calls solve_captcha, submits, and
+// confirms via check_logged_in.
+func TestE2EAgentPrimaryCaptchaMock(t *testing.T) {
+	h := newHarness(t)
+	e := h.expect("captcha-mock")
+	ws := filepath.Join(h.ws, "captcha-mock-agent")
+	var key [32]byte
+	key[0] = 23
+	al := audit.NewNop()
+	bud := core.NewBudget(core.Limits{Time: 150 * time.Second, Solves: 10})
+	ts := solver.NewTestMode(map[string]string{"lab-sitekey": lab.LabCaptchaToken, "": lab.LabCaptchaToken})
+	resolver := captcha.NewResolver([]captcha.Solver{ts}, nil, captcha.NewCoreBudget(bud), 2, al)
+	policy := lab.NewPolicyModel()
+	authr := &auth.Authenticator{
+		Target: e.Root, Account: "captcha-mock", Creds: identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password},
+		Perceiver: perceive.New(),
+		Sessions:  &auth.FileSessionStore{Path: filepath.Join(ws, "s.enc"), Key: &key},
+		Writer:    &handback.FileWriter{Dir: filepath.Join(ws, "art"), Account: "captcha-mock"},
+		Audit:     al, Budget: bud, Captcha: resolver,
+		Agent: policy, AuthDriver: auth.AuthDriverAgent, Recovery: auth.RecoveryAgent,
+		Capture: handback.CaptureWindow{N: 3, T: 5 * time.Second}, EntryCache: filepath.Join(ws, "cache"), Timeout: 8 * time.Second,
+	}
+	res, err := authr.Run(h.ctx, h.b, auth.Login, auth.Hints{LoginURL: e.LoginURL})
+	if err != nil {
+		t.Fatalf("agent-primary captcha-mock should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	if len(res.Trace.SuccessEvidence) == 0 {
+		t.Errorf("expected success evidence: %+v", res.Trace)
+	}
+	if len(res.Trace.Captcha) == 0 {
+		t.Errorf("expected a captcha step in the trace: %+v", res.Trace)
+	}
+}
+
 func TestE2ECaptchaMockTestmode(t *testing.T) {
 	h := newHarness(t)
 	ts := solver.NewTestMode(map[string]string{"lab-sitekey": lab.LabCaptchaToken, "": lab.LabCaptchaToken})

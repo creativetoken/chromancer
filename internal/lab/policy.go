@@ -31,11 +31,12 @@ type PolicyModel struct {
 	// Minimal run-local memory for loop-breaking. One PolicyModel instance drives
 	// one run, so per-instance counters are safe. Everything else is derived fresh
 	// from each observation.
-	dismissed bool
-	resent    bool
-	clicked   map[int]bool
-	checks    int
-	calls     int
+	dismissed     bool
+	resent        bool
+	clicked       map[int]bool
+	checks        int
+	captchaSolves int
+	calls         int
 }
 
 // NewPolicyModel returns the lab policy. It panics outside tests.
@@ -121,9 +122,18 @@ func (p *PolicyModel) decide(o observation, avail map[string]bool) act {
 		}
 	}
 
-	// 3. CAPTCHA widget → solve via the tool.
+	// 3. CAPTCHA widget → solve via the tool, but fill a login form first (the
+	// solve injects a token the form then submits). Solve once per challenge; a
+	// captcha error re-arms a solve.
 	if has("solve_captcha") && o.hasCaptchaWidget {
-		return act{"action": "solve_captcha", "why": "a CAPTCHA is present on this page"}
+		needFillFirst := o.passwordField != nil && !(o.loginFilled || o.passwordField.filled)
+		if o.captchaError {
+			p.captchaSolves = 0
+		}
+		if !needFillFirst && p.captchaSolves < 1 {
+			p.captchaSolves++
+			return act{"action": "solve_captcha", "why": "solve the CAPTCHA before submitting"}
+		}
 	}
 
 	// 4. Cookie/consent banner → dismiss once (privacy-preserving).
@@ -246,6 +256,7 @@ type observation struct {
 
 	botWall          bool
 	hasCaptchaWidget bool
+	captchaError     bool
 	consentBanner    bool
 	loggedInHint     bool
 	asksForCode      bool
@@ -323,6 +334,8 @@ func parseObservation(obs string) observation {
 	// page DATA, where the alert text runs into form labels ("…wrong, please try
 	// again Email Password…") and yields false positives.
 	o.credsRejected = credRejectRe.MatchString(o.title + " " + o.message)
+	o.captchaError = regexp.MustCompile(`(?i)captcha`).MatchString(o.message) &&
+		regexp.MustCompile(`(?i)(incorrect|failed|invalid|try again|complete)`).MatchString(o.message)
 	o.wantLink = linkAskRe.MatchString(hay)
 	o.needsResendFirst = noCodeYetRe.MatchString(hay) && !codeAlreadySent(hay)
 	// SMS/phone cues win over generic 2FA wording (an SMS page may also say

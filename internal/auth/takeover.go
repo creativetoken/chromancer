@@ -383,10 +383,15 @@ func (a *Authenticator) agentResend(ctx context.Context, p browser.Page, deps Fl
 	if target == nil {
 		return fmt.Errorf("no resend control on this page")
 	}
+	// Capture the freshness window BEFORE the click: the resend triggers the
+	// server to deliver the new code during the click, so a timestamp taken after
+	// the click (which, on a slower backend, returns well after delivery) would
+	// exclude the very code we just asked for.
+	before := time.Now()
 	if err := (actor{deps}).click(ctx, target, "resend"); err != nil {
 		return err
 	}
-	*since = time.Now()
+	*since = before
 	_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
 	a.trace.Add("agent takeover: resent verification")
 	return nil

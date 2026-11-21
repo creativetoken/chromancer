@@ -295,7 +295,6 @@ var (
 	totpRe      = regexp.MustCompile(`(?i)(authenticator|authentication app|authentication code|totp|google authenticator|authy)`)
 	codeFieldRe = regexp.MustCompile(`(?i)(code|otp|one-?time|verification|passcode|2fa|mfa)`)
 	resendRe    = regexp.MustCompile(`(?i)(resend|send (a |another )?(new )?code|didn'?t (get|receive))`)
-	noCodeYetRe = regexp.MustCompile(`(?i)(resend|didn'?t (get|receive)|haven'?t received|request a (new )?code)`)
 	submitRe    = regexp.MustCompile(`(?i)^(log ?in|sign ?in|submit|continue|next|verify|confirm)$`)
 	primaryRe   = regexp.MustCompile(`(?i)^(continue.*|proceed.*|confirm.*|trust this device|got it|next|verify|yes.*|allow.*|i agree.*|accept.*)$`)
 	avoidRe     = regexp.MustCompile(`(?i)(delete|remove|close account|deactivate|cancel|log ?out|sign ?out)`)
@@ -337,7 +336,11 @@ func parseObservation(obs string) observation {
 	o.captchaError = regexp.MustCompile(`(?i)captcha`).MatchString(o.message) &&
 		regexp.MustCompile(`(?i)(incorrect|failed|invalid|try again|complete)`).MatchString(o.message)
 	o.wantLink = linkAskRe.MatchString(hay)
-	o.needsResendFirst = noCodeYetRe.MatchString(hay) && !codeAlreadySent(hay)
+	// Resend before entering when the page has a resend control (checked in
+	// decide) and has NOT confirmed a code was just sent — e.g. the resend-OTP app
+	// delivers nothing until "Resend code" is clicked. Not keyed on specific
+	// button wording, which can perceive differently across browser backends.
+	o.needsResendFirst = !codeAlreadySent(hay)
 	// SMS/phone cues win over generic 2FA wording (an SMS page may also say
 	// "two-step verification"); then an explicit authenticator cue; else email.
 	switch {

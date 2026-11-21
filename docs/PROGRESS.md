@@ -15,9 +15,13 @@ Working through the agent-default plan (see DECISIONS.md for choices):
   OTP email delivered after 4 logins in ~50 min). Stopped at 4/5 live attempts
   per the live-site rate-limit rule. Session restored. See docs/eval/agent-only.md.
 - [~] Step 3: CLI default flipped to --auth-driver agent (deterministic selectable
-  + deprecated, README updated). PR opened feat/agent-only -> main. **Merge is
-  HELD**: the gate requires step 2 to pass live, which it did not (rate-limited +
-  OTP-entry gap). PR left open with the reason documented; proceeding to step 4.
+  + deprecated, README updated). **Merge is HELD**: the gate requires step 2 to
+  pass live, which it did not (rate-limited + OTP-entry gap). Gate otherwise green:
+  build/vet/lint + unit suite pass; agent-primary lab e2e chromium 11/11 (camoufox
+  not re-run this session). **PR could not be auto-opened** — no `gh`/token in this
+  env (SSH remote); branch pushed. PR title/body ready at scratchpad/PR_BODY.md;
+  open via: https://github.com/creativetoken/chromancer/compare/main...feat/agent-only?expand=1
+  Proceeding to step 4 on branch feat/icon-signin.
 - [ ] Step 4: icon-only sign-in controls (feat/icon-signin) — new branch off
   feat/agent-only. Includes the live OTP-entry element/type-stage diagnosis as a
   follow-up (the field resists rod element ops; needs perceiver/executor work).

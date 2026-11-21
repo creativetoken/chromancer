@@ -106,7 +106,16 @@ icon on `/en` (no text "sign in" link; `/en/login` 404s). The direct form is
 | cold `/en` | agent | failed/human ✓ | no sign-in link to find; escalates safely (after the success-detector fix; before it, false `done`) |
 | warm `/en-gb/sign-in` #1 | agent | failed | filled form + reached OTP; code fetched but **entry failed** |
 | warm `/en-gb/sign-in` #2 | agent | failed | instrumented: code `extracted=1`, typing hit a **focus/entry timeout**; retries **locked out** (`claimed=1`) |
-| warm `/en-gb/sign-in` #3 | agent | failed | after unclaim fix: no lockout (`claimed=0 extracted=1` each retry); entry still times out ("context deadline exceeded") — under diagnosis |
+| warm `/en-gb/sign-in` #3 | agent | failed | after unclaim fix: no lockout (`claimed=0 extracted=1` each retry); entry still times out ("context deadline exceeded") at the element/type stage |
+| warm `/en-gb/sign-in` #4 | agent | failed (rate limit) | filled + submitted; page said "code sent" but **no OTP email was delivered** (`newer=0` throughout) — Bambu throttled verification email after 4 logins in ~50 min |
+
+**Stopped at 4/5 live attempts: hit a verification rate limit** (per the live-site
+rules — stop on a rate limit, don't keep retrying the verification). The last
+delivered OTP was for attempt #3; attempt #4's was throttled. Step 2 is therefore
+**not confirmed live**: the last useful signal (attempt #3) was that the code is
+fetched but entry into bambulab's live code field times out at the element/type
+stage. Stage-naming diagnostics + a 20s entry budget were added but could not be
+exercised (attempt #4 never received a code). Session restored after every run.
 
 **Bugs found + fixed via these runs (all with lab repros + tests):**
 - Success detector counted consent/CDN/CSRF cookies as a login → false `done`

@@ -120,6 +120,21 @@ func cmdCreds(ctx context.Context, args []string) error {
 	return nil
 }
 
+// cliAuthDriver resolves the --auth-driver flag for the CLI. The default (empty
+// flag) is the agent driver; "deterministic" is still selectable but deprecated
+// and prints a warning. The library zero value stays deterministic so the
+// existing deterministic test suite is unaffected — only the CLI default flips.
+func cliAuthDriver(s string) (auth.AuthDriver, bool) {
+	if strings.TrimSpace(s) == "" {
+		return auth.AuthDriverAgent, true
+	}
+	ad, ok := auth.ParseAuthDriver(s)
+	if ok && ad == auth.AuthDriverDeterministic {
+		fmt.Fprintln(os.Stderr, "warning: --auth-driver deterministic is deprecated; the agent driver is now the default and the deterministic path will be removed in a future release.")
+	}
+	return ad, ok
+}
+
 func cmdAuth(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	account := fs.String("account", "", "account name")
@@ -128,7 +143,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	signupURL := fs.String("signup-url", "", "entrypoint hint for signup")
 	headful := fs.Bool("headful", false, "run with a visible browser")
 	recovery := fs.String("recovery", "agent", "dead-end recovery: agent|human|off (agent falls back to human when no LLM is configured)")
-	authDriver := fs.String("auth-driver", "", "sign-in driver: deterministic (default) | agent (LLM drives the whole flow; needs a model)")
+	authDriver := fs.String("auth-driver", "", "sign-in driver: agent (default; LLM drives the whole flow, needs a model) | deterministic (deprecated)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -145,7 +160,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("--recovery must be agent, human or off")
 	}
-	ad, ok := auth.ParseAuthDriver(*authDriver)
+	ad, ok := cliAuthDriver(*authDriver)
 	if !ok {
 		return fmt.Errorf("--auth-driver must be deterministic or agent")
 	}
@@ -239,12 +254,12 @@ func cmdEval(ctx context.Context, args []string) error {
 	runs := fs.Int("runs", 1, "runs per scenario")
 	captchaMode := fs.Bool("captcha", false, "benchmark the CAPTCHA solver chain vs the mock vendor apps")
 	crawlMode := fs.Bool("crawl", false, "benchmark the crawl drivers (bfs, llm, hybrid) vs the lab crawl app")
-	authDriver := fs.String("auth-driver", "", "sign-in driver to benchmark: deterministic (default) | agent")
+	authDriver := fs.String("auth-driver", "", "sign-in driver to benchmark: agent (default) | deterministic (deprecated)")
 	only := fs.String("only", "", "comma-separated scenario app names to run (default: all)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	ad, ok := auth.ParseAuthDriver(*authDriver)
+	ad, ok := cliAuthDriver(*authDriver)
 	if !ok {
 		return fmt.Errorf("--auth-driver must be deterministic or agent")
 	}

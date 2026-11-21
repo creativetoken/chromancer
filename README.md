@@ -51,16 +51,21 @@ agentbrowser creds put --target URL --account NAME --username U --password P
 Log in. Use `--mode signup` to register, and `--headful` to watch the browser:
 
 ```sh
-agentbrowser auth --account NAME --login-url URL
-agentbrowser auth --account NAME --login-url URL --auth-driver agent   # LLM drives every step
+agentbrowser auth --account NAME --login-url URL                          # agent driver (default)
+agentbrowser auth --account NAME --login-url URL --auth-driver deterministic  # deprecated code-first flow
 ```
 
-`--auth-driver agent` makes the LLM agent the sole driver of the sign-in (it
-finds and fills the form, clears interstitials, enters verification codes, solves
-CAPTCHAs, and confirms success itself); it needs a configured model and fails
-fast without one. The default (`deterministic`) uses the code-first flow with the
-agent as recovery. The account's real secrets never enter the model — the agent
-fills them through tools — and the account-safety deny-list is always enforced.
+**The agent driver is the default.** The LLM agent is the sole driver of the
+sign-in: it finds and fills the form, clears interstitials, enters verification
+codes, solves CAPTCHAs, and confirms success itself. It needs a configured model
+and fails fast without one. The account's real secrets never enter the model —
+the agent fills them through tools — and the account-safety deny-list is always
+enforced.
+
+`--auth-driver deterministic` selects the older code-first flow (entry finder +
+flow handlers + resolve loop, with the agent as recovery). **It is deprecated**
+and will be removed in a future release; selecting it prints a warning. Prefer
+the agent driver.
 
 Print the saved session, or the full bundle with `--bundle`:
 

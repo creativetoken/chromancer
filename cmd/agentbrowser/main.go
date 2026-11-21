@@ -126,6 +126,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	signupURL := fs.String("signup-url", "", "entrypoint hint for signup")
 	headful := fs.Bool("headful", false, "run with a visible browser")
 	recovery := fs.String("recovery", "agent", "dead-end recovery: agent|human|off (agent falls back to human when no LLM is configured)")
+	authDriver := fs.String("auth-driver", "", "sign-in driver: deterministic (default) | agent (LLM drives the whole flow; needs a model)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -142,6 +143,10 @@ func cmdAuth(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("--recovery must be agent, human or off")
 	}
+	ad, ok := auth.ParseAuthDriver(*authDriver)
+	if !ok {
+		return fmt.Errorf("--auth-driver must be deterministic or agent")
+	}
 	cfg := config.Default()
 	if *headful {
 		cfg.Headless = false
@@ -151,6 +156,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 		return err
 	}
 	a.Recovery = rec
+	a.AuthDriver = ad
 	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL}, nil)
 	if res.Err != nil {
 		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")
@@ -171,7 +177,7 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("crawl", flag.ContinueOnError)
 	account := fs.String("account", "", "account name")
 	headful := fs.Bool("headful", false, "run with a visible browser")
-	driver := fs.String("driver", "", "crawl driver: bfs (default) | llm | hybrid")
+	driver := fs.String("driver", "", "DEPRECATED (one release): the crawl is LLM-driven; this flag is ignored")
 	prompt := fs.String("prompt", "", "operator instruction for the llm driver (implies --driver llm)")
 	promptFile := fs.String("prompt-file", "", "read the operator instruction from a file")
 	systemPromptFile := fs.String("system-prompt-file", "", "override the built-in system template")
@@ -181,6 +187,9 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	}
 	if *account == "" {
 		return fmt.Errorf("--account is required")
+	}
+	if *driver != "" && *driver != "llm" {
+		fmt.Fprintf(os.Stderr, "warning: --driver is deprecated and will be removed next release; the crawl is now LLM-driven (ignoring --driver=%s)\n", *driver)
 	}
 	opts := app.CrawlOptions{Driver: *driver, Prompt: *prompt, MaxSteps: *maxSteps}
 	if *promptFile != "" {

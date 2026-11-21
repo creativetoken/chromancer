@@ -89,3 +89,36 @@ CAPTCHA before submitting.
 **Success rate does not drop on any scenario in a clean run.** The only caveat is
 run-to-run variance on `form-errors` with the cheapest model, addressed by using
 a stronger plan model.
+
+## 3. Live validation — bambulab.com (real provider, agent driver)
+
+Real end-to-end runs against bambulab.com with the configured account
+(`anthropic/claude-haiku-5-5`), headful, OTP via the Gmail relay. Results are
+labelled as live (a single real site, subject to its own changes/rate limits),
+not a benchmark. Live attempts are spaced ≥10 min; ≤5 per step.
+
+**Site change since 2026-11-17:** bambulab's sign-in is now an unlabeled header
+icon on `/en` (no text "sign in" link; `/en/login` 404s). The direct form is
+`/en-gb/sign-in` (combined email + password + emailed-code).
+
+| run | entry | outcome | note |
+|---|---|---|---|
+| cold `/en` | agent | failed/human ✓ | no sign-in link to find; escalates safely (after the success-detector fix; before it, false `done`) |
+| warm `/en-gb/sign-in` #1 | agent | failed | filled form + reached OTP; code fetched but **entry failed** |
+| warm `/en-gb/sign-in` #2 | agent | failed | instrumented: code `extracted=1`, typing hit a **focus/entry timeout**; retries **locked out** (`claimed=1`) |
+| warm `/en-gb/sign-in` #3 | agent | failed | after unclaim fix: no lockout (`claimed=0 extracted=1` each retry); entry still times out ("context deadline exceeded") — under diagnosis |
+
+**Bugs found + fixed via these runs (all with lab repros + tests):**
+- Success detector counted consent/CDN/CSRF cookies as a login → false `done`
+  on an escalation. Fixed (`TestStorageEvidenceConsentAndCDNCookiesNotAuth`).
+- A fetched code was claimed on fetch, so a failed entry locked out all retries.
+  Fixed: unclaim on failed entry (`TestClaimUnclaimAllowsRetry`).
+- Guarded one-time-code fields (key events don't land) — `TypeInto` now verifies
+  the value took and falls back to click + direct value-set
+  (`TestE2ECombinedVerifyGuarded`, fails without the fix).
+
+**Open:** live OTP entry into bambulab's code field still times out at the
+element/type stage (stage-naming diagnostics added). The lab combined-verify
+(incl. the guarded variant) passes agent-only on both backends; the remaining
+gap is specific to bambulab's live code field. Steps/tokens/time will be
+recorded here once a live run completes the OTP step.

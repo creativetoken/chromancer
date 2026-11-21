@@ -111,7 +111,9 @@ func (a *Authenticator) Run(ctx context.Context, b browser.Browser, mode Mode, h
 
 	// 2/3. Run the flow (entrypoint discovery + fill + submit + verify + success).
 	if err := a.authenticate(ctx, p, rec, mode, hints); err != nil {
-		return handback.Result{}, err
+		// Carry the partial trace out on failure: the agent_takeover step log is
+		// how a failed run (especially a live one) is diagnosed.
+		return handback.Result{Trace: a.trace}, err
 	}
 
 	// 6. Success → post-login capture → bundle → replay → write.

@@ -1,4 +1,17 @@
-Status: in progress — agent-only
+Status: in progress — agent default
+
+## Live validation + agent-default push (2026-11-21)
+Working through the agent-default plan (see DECISIONS.md for choices):
+- [x] Success-detector fix: consent/CDN/CSRF cookies no longer fake a login
+  (commit 537e27b). Cold bambulab agent run now ends in failed/human, not done.
+- [x] Trace emitted on failure (agent_takeover steps) for diagnosing live runs.
+- [~] Step 2: warm agent run on https://bambulab.com/en-gb/sign-in. Agent fills
+  the combined email+password form and reaches the email-OTP step, but has not
+  yet completed the code step within the 3-min budget. Verification FETCH is
+  proven working (live GetCode returns the code; funnel fetched/alias/newer/
+  extracted all pass). Diagnosis + lab repro in progress. Live attempts used: 1/5.
+- [ ] Step 3: flip default to agent + PR (gated on step 2 + lab e2e both backends).
+- [ ] Step 4: icon-only sign-in controls (feat/icon-signin).
 
 # Agent-only refactor (remove deterministic drivers; an LLM agent decides every step)
 > Branch `feat/agent-only` off `pre-agent-only` tag. Baseline eval: docs/eval/pre-agent-only.md.

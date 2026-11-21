@@ -161,7 +161,14 @@ func cmdAuth(ctx context.Context, args []string) error {
 	a.AuthDriver = ad
 	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL}, nil)
 	if res.Err != nil {
-		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")
+		// Emit the trace on failure too: the agent_takeover step log (tool calls,
+		// outcomes and the agent's "why") is how a failed live run is diagnosed.
+		out, _ := json.MarshalIndent(map[string]any{
+			"status": "failed",
+			"reason": res.Reason,
+			"error":  res.Err.Error(),
+			"trace":  res.Result.Trace,
+		}, "", "  ")
 		fmt.Println(string(out))
 		return res.Err
 	}

@@ -232,7 +232,8 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	}
 	res, err := authr.Run(bctx, b, mode, hints)
 	if err != nil {
-		return AuthResult{Err: err, Reason: auth.FailReason(err)}
+		// res carries the partial trace (agent_takeover steps) on failure.
+		return AuthResult{Result: res, Err: err, Reason: auth.FailReason(err)}
 	}
 	return AuthResult{Result: res}
 }

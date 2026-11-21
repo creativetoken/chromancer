@@ -1,6 +1,8 @@
 package verify
 
 import (
+	"html"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -139,25 +141,46 @@ func nearestKeyword(start, end int, keyLocs [][]int) (int, bool) {
 
 var (
 	linkKeywordRe = regexp.MustCompile(`(?i)(verify|confirm|activate|magic|sign[- ]?in|log[- ]?in|validate|authenticate|account)`)
-	linkRejectRe  = regexp.MustCompile(`(?i)(unsubscribe|privacy|help|support|terms|facebook|twitter|instagram|linkedin|/track|/pixel|utm_|\.png|\.gif|\.jpg|mailto:)`)
-	tokenParamRe  = regexp.MustCompile(`(?i)[?&](token|code|t|k|key|otp|confirmation|verification|oobCode|hash)=`)
+	// Links that are never a verification target, whatever else they contain.
+	// NOTE: utm_ and click-tracking redirects are deliberately NOT rejected here —
+	// a genuine verification link often carries utm_ params or is wrapped by a
+	// click-tracker; those are handled by stripping params / scoring anchor text.
+	linkRejectRe = regexp.MustCompile(`(?i)(unsubscribe|/privacy|/help|/support|/terms|facebook\.com|twitter\.com|x\.com/|instagram\.com|linkedin\.com|/pixel|\.png|\.gif|\.jpg|mailto:)`)
+	tokenParamRe = regexp.MustCompile(`(?i)[?&](token|code|t|k|key|otp|confirmation|verification|oob[cC]ode|hash)=`)
+	// Known click-tracking / redirect hosts: the real destination is hidden, so
+	// such a link is scored by its visible anchor text instead of its URL.
+	trackerHostRe = regexp.MustCompile(`(?i)^https?://[^/]*(sendgrid\.net|list-manage\.com|mailchimp\.com|mandrillapp\.com|sparkpostmail|hubspotlinks|hs-sendgrid|rs6\.net|awstrack\.me|sendgrid\.com|ct\.sendgrid|clicks?\.|links?\.|email\.|e\.|track|redirect)`)
+	// <a href="URL">anchor text</a>, so a link can be scored by what it says.
+	anchorRe = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>`)
+	tagRe    = regexp.MustCompile(`(?s)<[^>]*>`)
 )
 
-// ExtractLink returns the most likely verification link in a message. text is
-// plain text (HTML already converted); targetDomain is the app's domain (may be
-// empty). ok=false when nothing plausible is found.
+// candidate is one extracted link with the anchor text it was shown under.
+type candidate struct {
+	url, anchor string
+}
+
+// ExtractLink returns the most likely verification link in a message. text may
+// be plain text or raw HTML (the caller passes both concatenated); targetDomain
+// is the app's domain (may be empty). ok=false when nothing plausible is found.
+//
+// It decodes HTML entities (so `&amp;` in a query string is not left in the
+// URL), reads <a href> anchors so a click-tracking redirect can be scored by its
+// visible text, and strips tracking params (utm_*, etc.) rather than rejecting a
+// link that carries them.
 func ExtractLink(text, targetDomain string) (string, bool) {
-	urls := linkRe.FindAllString(text, -1)
-	if len(urls) == 0 {
+	cands := linkCandidates(text)
+	if len(cands) == 0 {
 		return "", false
 	}
 	best, bestScore := "", -1<<30
-	for _, u := range urls {
-		u = strings.TrimRight(u, ".,);]")
-		if linkRejectRe.MatchString(u) {
+	for _, c := range cands {
+		u := cleanURL(c.url)
+		if u == "" || linkRejectRe.MatchString(u) {
 			continue
 		}
 		score := 0
+		tracker := trackerHostRe.MatchString(u)
 		if linkKeywordRe.MatchString(u) {
 			score += 3
 		}
@@ -167,6 +190,14 @@ func ExtractLink(text, targetDomain string) (string, bool) {
 		if targetDomain != "" && strings.Contains(u, targetDomain) {
 			score += 2
 		}
+		// Score by anchor text too — decisive for a tracker whose URL is opaque.
+		if a := strings.ToLower(c.anchor); a != "" && linkKeywordRe.MatchString(a) {
+			if tracker {
+				score += 3
+			} else {
+				score++
+			}
+		}
 		if score > bestScore {
 			best, bestScore = u, score
 		}
@@ -175,4 +206,53 @@ func ExtractLink(text, targetDomain string) (string, bool) {
 		return "", false
 	}
 	return best, true
+}
+
+// linkCandidates collects links from <a href> anchors (with their text) and from
+// bare URLs in the text. HTML entities are decoded first.
+func linkCandidates(text string) []candidate {
+	decoded := html.UnescapeString(text)
+	var out []candidate
+	seen := map[string]bool{}
+	for _, m := range anchorRe.FindAllStringSubmatch(text, -1) {
+		href := html.UnescapeString(strings.TrimSpace(m[1]))
+		anchor := strings.TrimSpace(html.UnescapeString(tagRe.ReplaceAllString(m[2], " ")))
+		if strings.HasPrefix(strings.ToLower(href), "http") {
+			out = append(out, candidate{url: href, anchor: anchor})
+			seen[cleanURL(href)] = true
+		}
+	}
+	for _, u := range linkRe.FindAllString(decoded, -1) {
+		cu := cleanURL(u)
+		if cu != "" && !seen[cu] {
+			out = append(out, candidate{url: u})
+			seen[cu] = true
+		}
+	}
+	return out
+}
+
+// cleanURL trims trailing punctuation and strips tracking query params (utm_*,
+// mc_*, and similar) while preserving the rest of the URL.
+func cleanURL(u string) string {
+	u = strings.TrimRight(strings.TrimSpace(u), ".,);]>\"'")
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return u
+	}
+	q := parsed.Query()
+	removed := false
+	for k := range q {
+		lk := strings.ToLower(k)
+		if strings.HasPrefix(lk, "utm_") || strings.HasPrefix(lk, "mc_") ||
+			lk == "mkt_tok" || lk == "_hsenc" || lk == "_hsmi" || lk == "gclid" || lk == "fbclid" {
+			q.Del(k)
+			removed = true
+		}
+	}
+	if !removed {
+		return u // leave a clean URL byte-for-byte unchanged
+	}
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
 }

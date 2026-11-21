@@ -1,6 +1,9 @@
 package verify
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractCode(t *testing.T) {
 	cases := []struct {
@@ -46,6 +49,68 @@ Follow us https://twitter.com/example`
 	got, ok = ExtractLink("Sign in: https://auth.other.net/magic?k=deadbeef", "")
 	if !ok || got != "https://auth.other.net/magic?k=deadbeef" {
 		t.Fatalf("magic link = (%q,%v)", got, ok)
+	}
+}
+
+func TestExtractLinkHTMLEntities(t *testing.T) {
+	// A query string split with &amp; must be decoded, not left as "&amp;".
+	body := `<p>Confirm: <a href="https://app.example.com/verify?token=abc123&amp;next=%2Fhome">Verify your email</a></p>`
+	got, ok := ExtractLink(body, "example.com")
+	if !ok {
+		t.Fatalf("no link found in %q", body)
+	}
+	if got != "https://app.example.com/verify?token=abc123&next=%2Fhome" {
+		t.Fatalf("entity decode failed: got %q", got)
+	}
+}
+
+func TestExtractLinkUTMStripped(t *testing.T) {
+	// A verification link carrying utm_ params is kept (params stripped), not
+	// rejected.
+	body := "Verify: https://app.example.com/verify?token=abc123&utm_source=welcome&utm_medium=email"
+	got, ok := ExtractLink(body, "example.com")
+	if !ok {
+		t.Fatal("a utm-tagged verification link must not be rejected")
+	}
+	if strings.Contains(got, "utm_") {
+		t.Fatalf("utm params should be stripped, got %q", got)
+	}
+	if !strings.Contains(got, "token=abc123") {
+		t.Fatalf("token must be preserved, got %q", got)
+	}
+}
+
+func TestExtractLinkTrackerScoredByAnchor(t *testing.T) {
+	// A click-tracking redirect whose URL is opaque is chosen on its anchor text.
+	body := `<a href="https://click.sendgrid.net/ls/click?upn=OPAQUEHASH">Confirm your account</a>
+<a href="https://click.sendgrid.net/ls/click?upn=OTHERHASH">Unsubscribe</a>`
+	got, ok := ExtractLink(body, "")
+	if !ok {
+		t.Fatal("tracker link with a verification anchor should be selected")
+	}
+	if !strings.Contains(got, "OPAQUEHASH") {
+		t.Fatalf("expected the 'Confirm your account' tracker link, got %q", got)
+	}
+}
+
+func TestToAliasExactMatch(t *testing.T) {
+	m := parsedMsg{to: []string{"Me <me@example.com>", "team@example.com"}}
+	if !m.toAlias("me@example.com") {
+		t.Error("exact address should match")
+	}
+	if m.toAlias("notme@example.com") {
+		t.Error("a different full address must NOT match")
+	}
+	// A substring that is not a full address boundary must not match.
+	if m.toAlias("e@example.com") {
+		t.Error("substring of the local part must not match a full address")
+	}
+	// Bare local-part alias matches by exact local part.
+	if !m.toAlias("team") {
+		t.Error("bare local-part alias should match")
+	}
+	if m.toAlias("tea") {
+		t.Error("partial local part must not match")
 	}
 }
 

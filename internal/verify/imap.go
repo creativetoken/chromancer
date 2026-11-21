@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	netmail "net/mail"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	_ "github.com/emersion/go-message/charset" // register non-UTF-8 charset decoders for MIME bodies/headers
 	"github.com/emersion/go-message/mail"
 )
 
@@ -410,13 +412,53 @@ type parsedMsg struct {
 }
 
 func (m parsedMsg) toAlias(alias string) bool {
-	alias = strings.ToLower(strings.TrimSpace(alias))
-	for _, a := range m.to {
-		if strings.Contains(strings.ToLower(a), alias) {
-			return true
+	want := strings.ToLower(strings.TrimSpace(alias))
+	if want == "" {
+		return false
+	}
+	// If the alias looks like a full address, parse addresses and compare the
+	// mailbox exactly (so "me@x.com" does not match "notme@x.com" or an address
+	// that merely contains it as a substring). A bare local-part alias still
+	// matches by exact local-part.
+	wantLocal, wantFull := splitAddr(want)
+	for _, raw := range m.to {
+		for _, field := range strings.Split(raw, ",") {
+			addr := parseAddr(field)
+			if addr == "" {
+				continue
+			}
+			if addr == want {
+				return true
+			}
+			if !wantFull {
+				if local, _ := splitAddr(addr); local == wantLocal {
+					return true
+				}
+			}
 		}
 	}
 	return false
+}
+
+// parseAddr extracts the bare address from a header field via net/mail, falling
+// back to a trimmed lowercase of the field.
+func parseAddr(field string) string {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return ""
+	}
+	if a, err := netmail.ParseAddress(field); err == nil {
+		return strings.ToLower(strings.TrimSpace(a.Address))
+	}
+	return strings.ToLower(field)
+}
+
+// splitAddr returns the local part and whether the value contains an "@".
+func splitAddr(addr string) (local string, full bool) {
+	if i := strings.IndexByte(addr, '@'); i >= 0 {
+		return addr[:i], true
+	}
+	return addr, false
 }
 
 func parseMessage(msg *imap.Message, section *imap.BodySectionName) parsedMsg {

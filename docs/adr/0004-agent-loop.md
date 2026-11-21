@@ -1,6 +1,12 @@
 # ADR 0004 — Agent Loop: deterministic skill layer + plan/act/verify fallback
 
-**Status:** Accepted · **Date:** 2026-11-15
+**Status:** Superseded by [ADR 0017](0017-agent-only-driver.md) (2026-11-21) · **Date:** 2026-11-15
+
+> **Superseded.** The deterministic-first loop below is replaced by an
+> agent-only driver: the LLM agent decides every step of auth and crawl, and the
+> deterministic skills become tools it calls rather than a driver that precedes
+> it. See [ADR 0017](0017-agent-only-driver.md). The record below is kept for
+> history.
 
 ## Context
 Control-loop shape determines reliability and cost. Options: single ReAct loop (one model

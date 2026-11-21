@@ -20,6 +20,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/eval"
 	"github.com/creativetoken/chromancer/internal/identity"
 	"github.com/creativetoken/chromancer/internal/lab"
+	"github.com/creativetoken/chromancer/internal/model"
 	"github.com/creativetoken/chromancer/internal/server"
 )
 
@@ -230,8 +231,13 @@ func cmdEval(ctx context.Context, args []string) error {
 	runs := fs.Int("runs", 1, "runs per scenario")
 	captchaMode := fs.Bool("captcha", false, "benchmark the CAPTCHA solver chain vs the mock vendor apps")
 	crawlMode := fs.Bool("crawl", false, "benchmark the crawl drivers (bfs, llm, hybrid) vs the lab crawl app")
+	authDriver := fs.String("auth-driver", "", "sign-in driver to benchmark: deterministic (default) | agent")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	ad, ok := auth.ParseAuthDriver(*authDriver)
+	if !ok {
+		return fmt.Errorf("--auth-driver must be deterministic or agent")
 	}
 	cfg := config.Default()
 	cfg.Headless = true
@@ -239,6 +245,18 @@ func cmdEval(ctx context.Context, args []string) error {
 	a, err := app.New(cfg)
 	if err != nil {
 		return err
+	}
+	a.AuthDriver = ad
+	// For the agent driver, wrap the configured provider so tokens/cost are
+	// measured, and hand it to the agent explicitly.
+	var counter *eval.CountingProvider
+	if ad == auth.AuthDriverAgent {
+		base := a.Router.For(model.TaskPlan)
+		if base == nil || base.Name() == "mock" {
+			return fmt.Errorf("--auth-driver agent needs a real LLM provider; none configured (set e.g. ANTHROPIC_API_KEY)")
+		}
+		counter = &eval.CountingProvider{LLMProvider: base}
+		a.AgentModel = counter
 	}
 	srv := lab.New()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -251,7 +269,11 @@ func cmdEval(ctx context.Context, args []string) error {
 	go hs.Serve(ln)
 	defer hs.Close()
 
-	h := &eval.Harness{App: a, Lab: srv, LabBase: base, ModelName: cfg.LLM.Provider, Runs: *runs}
+	modelName := cfg.LLM.Provider
+	if counter != nil {
+		modelName = counter.Name()
+	}
+	h := &eval.Harness{App: a, Lab: srv, LabBase: base, ModelName: modelName, Runs: *runs, Counter: counter}
 	if *crawlMode {
 		rows, err := h.CrawlBench(ctx, []string{"bfs", "llm", "hybrid"})
 		if err != nil {

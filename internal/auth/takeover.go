@@ -130,6 +130,9 @@ func (a *Authenticator) runAgent(ctx context.Context, p browser.Page, rec *handb
 
 	rep, cerr := ex.Crawl(tctx)
 	a.recordAgentTrace(reason, rep)
+	if rep != nil {
+		a.trace.AgentSteps += rep.Steps
+	}
 	if cerr != nil {
 		a.log("agent_takeover", map[string]any{"reason": reason, "result": "error", "error": cerr.Error()})
 		return false, cerr
@@ -258,6 +261,9 @@ func (a *Authenticator) runAgentPrimary(ctx context.Context, p browser.Page, rec
 
 	rep, cerr := ex.Crawl(tctx)
 	a.recordAgentTrace("agent-primary", rep)
+	if rep != nil {
+		a.trace.AgentSteps += rep.Steps
+	}
 	if cerr != nil {
 		a.log("agent_primary", map[string]any{"result": "error", "error": cerr.Error()})
 	}

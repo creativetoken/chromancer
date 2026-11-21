@@ -159,7 +159,11 @@ func (h *Harness) Run(ctx context.Context, scenarios []Scenario) ([]Row, error) 
 			row.AvgMillis += elapsed
 			if res.Err == nil {
 				row.Successes++
-				row.AvgSteps += float64(len(res.Result.Trace.Steps))
+				steps := res.Result.Trace.AgentSteps
+				if steps == 0 {
+					steps = len(res.Result.Trace.Steps)
+				}
+				row.AvgSteps += float64(steps)
 			} else {
 				row.LastError = res.Err.Error()
 			}

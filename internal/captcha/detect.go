@@ -127,7 +127,7 @@ const probeJS = `() => {
   return JSON.stringify({scripts, iframes, widgets, images, exec_calls: execCalls, text});
 }`
 
-func probe(ctx context.Context, p *browser.Page) (domProbe, error) {
+func probe(ctx context.Context, p browser.Page) (domProbe, error) {
 	var out domProbe
 	if p == nil {
 		return out, nil
@@ -546,7 +546,7 @@ func siteKeyFromRender(src string) string {
 	return ""
 }
 
-func origin(p *browser.Page) string {
+func origin(p browser.Page) string {
 	if p == nil {
 		return ""
 	}
@@ -578,7 +578,7 @@ type unifiedDetector struct{}
 func (unifiedDetector) Vendor() Vendor { return VendorCustom }
 
 // Detect implements Detector.
-func (unifiedDetector) Detect(ctx context.Context, p *browser.Page, _ perceive.State, sig NetSignals) (Challenge, bool, error) {
+func (unifiedDetector) Detect(ctx context.Context, p browser.Page, _ perceive.State, sig NetSignals) (Challenge, bool, error) {
 	pr, err := probe(ctx, p)
 	if err != nil {
 		pr = domProbe{Scripts: sig.ScriptSrcs}
@@ -602,7 +602,7 @@ func (unifiedDetector) Detect(ctx context.Context, p *browser.Page, _ perceive.S
 func DefaultDetectors() []Detector { return []Detector{unifiedDetector{}} }
 
 // DetectAny runs detectors in order and returns the first challenge found.
-func DetectAny(ctx context.Context, dets []Detector, p *browser.Page, st perceive.State, sig NetSignals) (Challenge, bool) {
+func DetectAny(ctx context.Context, dets []Detector, p browser.Page, st perceive.State, sig NetSignals) (Challenge, bool) {
 	for _, d := range dets {
 		if c, ok, err := d.Detect(ctx, p, st, sig); err == nil && ok {
 			return c, true

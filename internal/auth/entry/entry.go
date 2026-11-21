@@ -52,7 +52,7 @@ type FormCheck func(st perceive.State, mode Mode) (ok bool, variant string)
 
 // Deps are discovery's collaborators.
 type Deps struct {
-	Page      *browser.Page
+	Page      browser.Page
 	Perceiver perceive.Perceiver
 	Router    model.ModelRouter // optional; nil disables the LLM fallback
 	Check     FormCheck

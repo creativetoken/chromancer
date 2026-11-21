@@ -47,7 +47,7 @@ const injectJS = `(sel, token, cb) => {
 }`
 
 // Apply implements Injector.
-func (g genericInjector) Apply(ctx context.Context, p *browser.Page, c Challenge, r Result) error {
+func (g genericInjector) Apply(ctx context.Context, p browser.Page, c Challenge, r Result) error {
 	switch r.Kind {
 	case ResultHandoff:
 		return nil // the human already acted

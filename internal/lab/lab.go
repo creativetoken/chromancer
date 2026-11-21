@@ -363,6 +363,7 @@ func allApps() []App {
 		&resendOTPApp{name: "takeover-resend", cookie: "tkr_sid"},
 		&botWallApp{name: "takeover-botwall", cookie: "tkb_sid"},
 		&hydrationLoginApp{cookie: "hyd_sid"},
+		&popupLoginApp{cookie: "pop_sid"},
 		&stuckLoginApp{},
 		&crawlApp{},
 		&menuSignupApp{},

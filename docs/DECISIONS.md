@@ -254,3 +254,69 @@
   mock-LLM e2e tests prove each solvable scenario completes, the bot-wall goes to a human with zero
   agent calls, a wrong password fails without the agent, a prompt-injection "delete account" is
   blocked by the deny-list while the legit login still completes, and no secret reaches the model.
+- 2026-11-20 · **Backend-neutral browser layer via interfaces + a registry; go-rod isolated to
+  `internal/browser/rodbackend`** · a second engine (Camoufox) needs the browser API free of
+  go-rod types. `internal/browser` keeps the neutral value types (`Cookie`, `SessionState`,
+  `RequestEvent`/`ResponseEvent`, `NetworkSink`, `Options`) and defines interfaces `Browser` /
+  `Page` / `Frame` / `Element` + a neutral `Value` (only `Str`/`Bool`/`Int`/`Float`/`Nil`/
+  `Unmarshal` are used by callers). `Frame` exposes `Eval` (perceive runs per-frame JS); `Element`
+  is an opaque handle (callers only pass it back to `Page` methods). Backends self-register via
+  `browser.Register(name, Factory)`; callers use `browser.Open(ctx, name, Options)`. This keeps
+  `internal/browser` import-free of any engine, so `git grep go-rod/rod` hits only `rodbackend`.
+  The `Rod()` escape hatches are dropped (no engine type in the exported API). · alt: a build-tag
+  swap (can't run both engines in one binary / pick per target) or generics over the rod types
+  (still leaks rod in signatures).
+- 2026-11-20 · **Phase B (Camoufox) is partially deferred on this host; Phase A ships in full** ·
+  host is macOS (Darwin arm64) with no `Xvfb`/`x11vnc` (Linux-only); Camoufox `headless="virtual"`
+  and the x11vnc/noVNC handoff view cannot run natively here, and the B0 live spike (compare
+  chromium vs camoufox on real bot-detection sites) was left with unfilled site/host placeholders in
+  the brief — running it would cross the "no real-site interaction beyond the authorized spike" hard
+  stop with undefined targets. Decision: implement and verify Phase A completely on chromium; write
+  the Phase B pieces that build/unit-test here (sidecar launcher + `scripts/camoufox-setup.sh` +
+  `Dockerfile.camoufox`, the playwright-go client behind the interface with the version-match check,
+  the token-guarded handoff proxy + its refusal test); defer the live-only parts (B0 real-site
+  spike, Xvfb-backed e2e, live VNC view) under PROGRESS.md "Deferred" with this reason. · alt: run
+  everything in a Linux Docker container — deferred because the live site comparison still needs
+  defined targets and a controlled IP the brief did not supply.
+- 2026-11-20 · **Camoufox backend uses `github.com/playwright-community/playwright-go` v0.5200.0
+  (Playwright 1.52.0), pinned to `camoufox.PlaywrightVersion`** · the brief named
+  `mxschmitt/playwright-go`, which now redirects to the `playwright-community` fork (same versions);
+  Go resolves the canonical module path, so we require the canonical one. The module version
+  `v0.MMmm.patch` encodes the Playwright version; `CheckPlaywrightVersion` fails a major/minor skew at
+  sidecar startup. · alt: the mxschmitt path (stale redirect).
+- 2026-11-20 · **Two engine differences bridged inside the camoufox backend so shared code is
+  untouched:** (1) Playwright's `Evaluate` passes a SINGLE arg to the JS function (rod passes many),
+  so when a caller supplies >1 arg the backend bundles them into one array and wraps the expression
+  as `(__a) => (EXPR)(...__a)` — the shared perceiver `walkJS` runs unchanged on both. (2) Playwright
+  resource types are lowercase (`document`,`xhr`,…); the backend maps them to the CDP-style
+  capitalised `Type` (`Document`,`XHR`,…) the `AuthRecorder` already keys on, so capture + the
+  replayability check are backend-agnostic. · alt: change the shared perceiver/recorder per backend
+  (would fork the exact code that must not diverge).
+- 2026-11-20 · **Camoufox has no persistent profile: session state is cookies (context
+  `AddCookies`) + a per-origin init script that seeds local/sessionStorage BEFORE page scripts run**
+  (playwright `AddInitScript`), restored into a fresh context each run. UA is never overridden
+  (`SupportsUAOverride=false`) to keep Camoufox's fingerprint consistent. · alt: Playwright
+  `storage_state` on context creation — the init-script approach also covers sessionStorage (which
+  storage_state does not) and matches addition #4's "before page scripts" requirement.
+- 2026-11-20 · **Popups/new-auth-windows (addition #7) deferred behind the `browser.Page`
+  interface** · the interface does not surface popups (`OnPopup`) and no lab app / login flow in the
+  suite opens one, so adding the method + a lab e2e would be unverifiable here. Recorded as Deferred
+  in PROGRESS with the reason; revisit when a real target needs an auth popup. · alt: add a
+  speculative `OnPopup` now — rejected as untestable dead surface.
+- 2026-11-20 · **Camoufox validated live on arm64 Linux (Docker); exact pinned versions** ·
+  running on this host's Docker (Linux aarch64, no native Xvfb on the macOS host). Confirmed working
+  set: **camoufox 0.5.9** (pip `camoufox[geoip]`), **playwright 1.61.0** (camoufox allows `<1.63`;
+  pinned to 1.61 to match the Go client), **playwright-go `github.com/mxschmitt/playwright-go`
+  v0.6100.0** (Playwright 1.61.0; `PlaywrightVersion=1.61.0`), **Camoufox browser build
+  v158.0.1-beta.41** (`camoufox fetch`, ~1.3 GB, arm64), plus the GeoIP AIO + fingerprint-generator
+  model datasets. The earlier 0.4.11/1.52.0 pins were pre-live guesses; these are the validated
+  ones. The deferral above (popups) is now DONE — `ExpectPopup` is implemented and the popup-login
+  lab e2e passes on chromium (and on camoufox in the container). · alt: relax the version-match check
+  to allow a client one minor behind the 1.62 server — rejected; exact-match via pinning is safer.
+- 2026-11-20 · **B0 bot-detection measurement uses dedicated bot-detection TEST pages** (the brief
+  left `<SITE 1..3>` unfilled) · `arh.antoinevastel.com/bots/areyouheadless`, `bot.sannysoft.com`,
+  `abrahamjuliot.github.io/creepjs` — purpose-built, ethical to load (page only, no submission), and
+  each gives a clear per-page verdict. Note: from a datacenter IP (Docker), IP-reputation checks will
+  flag both engines regardless of fingerprint; B0 measures fingerprint/headless evasion, not IP. · alt:
+  real production login pages — rejected (no defined targets, and hammering third-party logins is out
+  of scope for a measurement).

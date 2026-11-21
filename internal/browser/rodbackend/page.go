@@ -1,7 +1,8 @@
-package browser
+package rodbackend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,23 +12,58 @@ import (
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/ysmood/gson"
+
+	"github.com/creativetoken/chromancer/internal/browser"
 )
 
-// Page is a single tab. All methods respect the ctx the page was created with
-// (and any ctx passed), so budgets/kill-switch unwind cleanly.
-type Page struct {
-	rp *rod.Page
-	b  *Browser
+// rodValue wraps a gson.JSON result as a neutral browser.Value.
+type rodValue struct{ j gson.JSON }
+
+func (v rodValue) Str() string    { return v.j.Str() }
+func (v rodValue) Bool() bool     { return v.j.Bool() }
+func (v rodValue) Int() int       { return v.j.Int() }
+func (v rodValue) Float() float64 { return v.j.Num() }
+func (v rodValue) Nil() bool      { return v.j.Nil() }
+func (v rodValue) Unmarshal(x any) error {
+	b, err := json.Marshal(v.j.Val())
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, x)
 }
 
-// Rod exposes the underlying rod page.
-func (p *Page) Rod() *rod.Page { return p.rp }
+// rodFrame wraps a rod page (a frame: the main document or an iframe).
+type rodFrame struct{ fr *rod.Page }
 
-// Browser returns the owning browser.
-func (p *Page) Browser() *Browser { return p.b }
+func (f *rodFrame) Eval(ctx context.Context, js string, args ...any) (browser.Value, error) {
+	res, err := f.fr.Context(ctx).Eval(js, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browser: frame eval: %w", err)
+	}
+	return rodValue{j: res.Value}, nil
+}
+
+// rodElement wraps a rod element handle.
+type rodElement struct{ el *rod.Element }
+
+func asEl(e browser.Element) (*rod.Element, error) {
+	re, ok := e.(*rodElement)
+	if !ok || re == nil || re.el == nil {
+		return nil, fmt.Errorf("browser: foreign or nil element handle %T", e)
+	}
+	return re.el, nil
+}
+
+// rodPage is a single tab.
+type rodPage struct {
+	rp *rod.Page
+	b  *rodBrowser
+}
+
+var _ browser.Page = (*rodPage)(nil)
 
 // Navigate loads url and waits for the load event, then for the SPA to settle.
-func (p *Page) Navigate(ctx context.Context, url string) error {
+func (p *rodPage) Navigate(ctx context.Context, url string) error {
 	rp := p.rp.Context(ctx)
 	if err := rp.Navigate(url); err != nil {
 		return fmt.Errorf("browser: navigate %s: %w", url, err)
@@ -36,13 +72,13 @@ func (p *Page) Navigate(ctx context.Context, url string) error {
 		// Some pages never fire load under a blocked subresource; continue.
 		p.b.logf("waitload: %v", err)
 	}
-	return p.WaitStable(ctx, DefaultStableTimeout)
+	return p.WaitStable(ctx, browser.DefaultStableTimeout)
 }
 
 // Reload reloads the current page and waits for it to settle. Useful for the
 // post-login capture window so authenticated XHRs re-fire even on a SPA whose
 // landing route is a hash change (which Navigate would not reload).
-func (p *Page) Reload(ctx context.Context) error {
+func (p *rodPage) Reload(ctx context.Context) error {
 	rp := p.rp.Context(ctx)
 	if err := rp.Reload(); err != nil {
 		return fmt.Errorf("browser: reload: %w", err)
@@ -50,11 +86,11 @@ func (p *Page) Reload(ctx context.Context) error {
 	if err := rp.WaitLoad(); err != nil && !errors.Is(err, context.Canceled) {
 		p.b.logf("reload waitload: %v", err)
 	}
-	return p.WaitStable(ctx, DefaultStableTimeout)
+	return p.WaitStable(ctx, browser.DefaultStableTimeout)
 }
 
 // URL returns the current top-level URL.
-func (p *Page) URL() string {
+func (p *rodPage) URL() string {
 	info, err := p.rp.Info()
 	if err != nil {
 		return ""
@@ -63,7 +99,7 @@ func (p *Page) URL() string {
 }
 
 // Title returns the document title.
-func (p *Page) Title() string {
+func (p *rodPage) Title() string {
 	res, err := p.rp.Eval(`() => document.title`)
 	if err != nil {
 		return ""
@@ -74,7 +110,7 @@ func (p *Page) Title() string {
 // WaitStable waits for DOM mutations to settle and in-flight requests to go
 // idle, bounded by timeout. It never returns an error for a mere timeout —
 // a page that keeps polling is still "stable enough" to act on.
-func (p *Page) WaitStable(ctx context.Context, timeout time.Duration) error {
+func (p *rodPage) WaitStable(ctx context.Context, timeout time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -97,20 +133,19 @@ func (p *Page) WaitStable(ctx context.Context, timeout time.Duration) error {
 }
 
 // Eval runs a JS function (e.g. `() => document.title`) in the main frame.
-func (p *Page) Eval(ctx context.Context, js string, args ...any) (gson.JSON, error) {
+func (p *rodPage) Eval(ctx context.Context, js string, args ...any) (browser.Value, error) {
 	res, err := p.rp.Context(ctx).Eval(js, args...)
 	if err != nil {
-		return gson.JSON{}, fmt.Errorf("browser: eval: %w", err)
+		return nil, fmt.Errorf("browser: eval: %w", err)
 	}
-	return res.Value, nil
+	return rodValue{j: res.Value}, nil
 }
 
-// Frames returns the page plus every nested iframe as rod pages (depth 1),
-// so perception and actions can target elements inside frames. Index 0 is
-// the main frame.
-func (p *Page) Frames(ctx context.Context) ([]*rod.Page, error) {
+// Frames returns the page plus every nested iframe (depth 1), so perception and
+// actions can target elements inside frames. Index 0 is the main frame.
+func (p *rodPage) Frames(ctx context.Context) ([]browser.Frame, error) {
 	rp := p.rp.Context(ctx)
-	out := []*rod.Page{rp}
+	out := []browser.Frame{&rodFrame{fr: rp}}
 	els, err := rp.Timeout(2 * time.Second).Elements("iframe")
 	if err != nil {
 		return out, nil // no iframes
@@ -120,13 +155,13 @@ func (p *Page) Frames(ctx context.Context) ([]*rod.Page, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, fr.Context(ctx))
+		out = append(out, &rodFrame{fr: fr.Context(ctx)})
 	}
 	return out, nil
 }
 
 // Screenshot captures the viewport as PNG.
-func (p *Page) Screenshot(ctx context.Context) ([]byte, error) {
+func (p *rodPage) Screenshot(ctx context.Context) ([]byte, error) {
 	data, err := p.rp.Context(ctx).Screenshot(false, &proto.PageCaptureScreenshot{Format: proto.PageCaptureScreenshotFormatPng})
 	if err != nil {
 		return nil, fmt.Errorf("browser: screenshot: %w", err)
@@ -136,15 +171,20 @@ func (p *Page) Screenshot(ctx context.Context) ([]byte, error) {
 
 // Element finds an element by CSS selector in the given frame (nil = main),
 // waiting up to timeout.
-func (p *Page) Element(ctx context.Context, frame *rod.Page, selector string, timeout time.Duration) (*rod.Element, error) {
-	if frame == nil {
-		frame = p.rp
+func (p *rodPage) Element(ctx context.Context, frame browser.Frame, selector string, timeout time.Duration) (browser.Element, error) {
+	target := p.rp
+	if frame != nil {
+		rf, ok := frame.(*rodFrame)
+		if !ok || rf == nil || rf.fr == nil {
+			return nil, fmt.Errorf("browser: foreign or nil frame handle %T", frame)
+		}
+		target = rf.fr
 	}
-	el, err := frame.Context(ctx).Timeout(timeout).Element(selector)
+	el, err := target.Context(ctx).Timeout(timeout).Element(selector)
 	if err != nil {
 		return nil, fmt.Errorf("browser: element %q: %w", selector, err)
 	}
-	return el, nil
+	return &rodElement{el: el}, nil
 }
 
 // WaitElementReady waits for an element to become genuinely actionable —
@@ -155,7 +195,11 @@ func (p *Page) Element(ctx context.Context, frame *rod.Page, selector string, ti
 // handler is attached. Gating the click on real readiness closes that race; a
 // detached/never-settling element returns an error so the caller can re-perceive
 // a fresh handle.
-func (p *Page) WaitElementReady(ctx context.Context, el *rod.Element, stableFor time.Duration) error {
+func (p *rodPage) WaitElementReady(ctx context.Context, e browser.Element, stableFor time.Duration) error {
+	el, err := asEl(e)
+	if err != nil {
+		return err
+	}
 	el = el.Context(ctx)
 	if err := el.WaitEnabled(); err != nil {
 		return fmt.Errorf("browser: wait enabled: %w", err)
@@ -172,7 +216,11 @@ func (p *Page) WaitElementReady(ctx context.Context, el *rod.Element, stableFor 
 }
 
 // Click clicks an element.
-func (p *Page) Click(ctx context.Context, el *rod.Element) error {
+func (p *rodPage) Click(ctx context.Context, e browser.Element) error {
+	el, err := asEl(e)
+	if err != nil {
+		return err
+	}
 	el = el.Context(ctx)
 	_ = el.ScrollIntoView()
 	if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
@@ -185,7 +233,7 @@ func (p *Page) Click(ctx context.Context, el *rod.Element) error {
 }
 
 // ClickAt clicks at viewport coordinates (used for set-of-marks region clicks).
-func (p *Page) ClickAt(ctx context.Context, x, y int) error {
+func (p *rodPage) ClickAt(ctx context.Context, x, y int) error {
 	rp := p.rp.Context(ctx)
 	if err := rp.Mouse.MoveTo(proto.NewPoint(float64(x), float64(y))); err != nil {
 		return fmt.Errorf("browser: move: %w", err)
@@ -196,9 +244,13 @@ func (p *Page) ClickAt(ctx context.Context, x, y int) error {
 	return nil
 }
 
-// TypeInto clears an input and types text into it (human-like via rod's
-// Input which dispatches key events).
-func (p *Page) TypeInto(ctx context.Context, el *rod.Element, text string) error {
+// TypeInto clears an input and types text into it (human-like via rod's Input
+// which dispatches key events).
+func (p *rodPage) TypeInto(ctx context.Context, e browser.Element, text string) error {
+	el, err := asEl(e)
+	if err != nil {
+		return err
+	}
 	el = el.Context(ctx)
 	_ = el.ScrollIntoView()
 	if err := el.Focus(); err != nil {
@@ -214,7 +266,11 @@ func (p *Page) TypeInto(ctx context.Context, el *rod.Element, text string) error
 }
 
 // SelectOption selects an <option> by visible text or value.
-func (p *Page) SelectOption(ctx context.Context, el *rod.Element, value string) error {
+func (p *rodPage) SelectOption(ctx context.Context, e browser.Element, value string) error {
+	el, err := asEl(e)
+	if err != nil {
+		return err
+	}
 	el = el.Context(ctx)
 	if err := el.Select([]string{value}, true, rod.SelectorTypeText); err != nil {
 		if err2 := el.Select([]string{value}, true, rod.SelectorTypeCSSSector); err2 != nil {
@@ -225,7 +281,11 @@ func (p *Page) SelectOption(ctx context.Context, el *rod.Element, value string) 
 }
 
 // PressEnter submits via the keyboard on the focused element.
-func (p *Page) PressEnter(ctx context.Context, el *rod.Element) error {
+func (p *rodPage) PressEnter(ctx context.Context, e browser.Element) error {
+	el, err := asEl(e)
+	if err != nil {
+		return err
+	}
 	el = el.Context(ctx)
 	if err := el.Focus(); err != nil {
 		return err
@@ -233,19 +293,56 @@ func (p *Page) PressEnter(ctx context.Context, el *rod.Element) error {
 	return el.Type(input.Enter)
 }
 
+// ExpectPopup runs trigger and returns the new page it opens (login/magic-link
+// popups), bounded by timeout. The new tab is set up like NewPage (UA + Network).
+func (p *rodPage) ExpectPopup(ctx context.Context, trigger func() error, timeout time.Duration) (browser.Page, error) {
+	// WaitOpen is bound to the parent page's own (long-lived) context; the
+	// timeout is gated with a timer so the popup we return is NOT tied to a ctx
+	// that gets cancelled when this call returns.
+	wait := p.rp.WaitOpen()
+	if err := trigger(); err != nil {
+		return nil, err
+	}
+	type res struct {
+		pg  *rod.Page
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		np, err := wait()
+		ch <- res{np, err}
+	}()
+	select {
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("browser: expect popup: timed out after %s", timeout)
+	case <-ctx.Done():
+		return nil, fmt.Errorf("browser: expect popup: %w", ctx.Err())
+	case r := <-ch:
+		if r.err != nil {
+			return nil, fmt.Errorf("browser: expect popup: %w", r.err)
+		}
+		if r.pg == nil {
+			return nil, fmt.Errorf("browser: expect popup: no page opened")
+		}
+		_ = p.b.applyUA(r.pg)
+		_ = (proto.NetworkEnable{}).Call(r.pg)
+		return &rodPage{rp: r.pg.Context(ctx), b: p.b}, nil
+	}
+}
+
 // Back navigates history back.
-func (p *Page) Back(ctx context.Context) error {
+func (p *rodPage) Back(ctx context.Context) error {
 	if err := p.rp.Context(ctx).NavigateBack(); err != nil {
 		return fmt.Errorf("browser: back: %w", err)
 	}
-	return p.WaitStable(ctx, DefaultStableTimeout)
+	return p.WaitStable(ctx, browser.DefaultStableTimeout)
 }
 
 // Close closes the tab.
-func (p *Page) Close() error { return p.rp.Close() }
+func (p *rodPage) Close() error { return p.rp.Close() }
 
 // Origin returns scheme://host[:port] of the current URL.
-func (p *Page) Origin() string {
+func (p *rodPage) Origin() string {
 	u := p.URL()
 	i := strings.Index(u, "://")
 	if i < 0 {

@@ -1,4 +1,4 @@
-package browser
+package rodbackend
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/creativetoken/chromancer/internal/browser"
 )
 
 func TestDeHeadless(t *testing.T) {
@@ -70,7 +72,7 @@ func TestUAStripsHeadlessMarker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	b, err := Launch(ctx, Options{Headless: true, ProfileDir: t.TempDir()})
+	b, err := Launch(ctx, browser.Options{Headless: true, ProfileDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -95,7 +97,7 @@ func TestUAStripsHeadlessMarker(t *testing.T) {
 		t.Fatalf("navigate 2: %v", err)
 	}
 
-	brands, err := p.rp.Eval(`() => JSON.stringify((navigator.userAgentData && navigator.userAgentData.brands) || [])`)
+	brands, err := p.Eval(ctx, `() => JSON.stringify((navigator.userAgentData && navigator.userAgentData.brands) || [])`)
 	if err != nil {
 		t.Fatalf("eval brands: %v", err)
 	}
@@ -103,7 +105,7 @@ func TestUAStripsHeadlessMarker(t *testing.T) {
 	t.Logf("effective UA:   %s", b.UserAgent())
 	t.Logf("request UA:     %s", gotUA)
 	t.Logf("Sec-CH-UA:      %s", gotCHUA)
-	t.Logf("navigator.brands: %s", brands.Value.Str())
+	t.Logf("navigator.brands: %s", brands.Str())
 
 	if strings.Contains(gotUA, "HeadlessChrome") {
 		t.Errorf("request User-Agent leaked HeadlessChrome: %q", gotUA)
@@ -111,7 +113,7 @@ func TestUAStripsHeadlessMarker(t *testing.T) {
 	if strings.Contains(gotCHUA, "HeadlessChrome") || strings.Contains(gotCHUA, "Headless") {
 		t.Errorf("Sec-CH-UA leaked headless: %q", gotCHUA)
 	}
-	if strings.Contains(brands.Value.Str(), "Headless") {
-		t.Errorf("navigator.userAgentData.brands leaked headless: %q", brands.Value.Str())
+	if strings.Contains(brands.Str(), "Headless") {
+		t.Errorf("navigator.userAgentData.brands leaked headless: %q", brands.Str())
 	}
 }

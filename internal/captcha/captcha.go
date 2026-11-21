@@ -136,13 +136,13 @@ type NetSignals struct {
 // Detector (core, per vendor) recognises a challenge from the page.
 type Detector interface {
 	Vendor() Vendor
-	Detect(ctx context.Context, p *browser.Page, st perceive.State, sig NetSignals) (Challenge, bool, error)
+	Detect(ctx context.Context, p browser.Page, st perceive.State, sig NetSignals) (Challenge, bool, error)
 }
 
 // Injector (core, per vendor) applies a solved Result to the live page.
 type Injector interface {
 	Vendor() Vendor
-	Apply(ctx context.Context, p *browser.Page, c Challenge, r Result) error
+	Apply(ctx context.Context, p browser.Page, c Challenge, r Result) error
 }
 
 // Solver is the plugin contract: solving only, never the Page. Describe() is
@@ -157,7 +157,7 @@ type Solver interface {
 // Resolver runs a prefiltered chain of solvers within budget and applies each
 // result via the Injector. The flow handler owns submit and calls Outcome.
 type Resolver interface {
-	Resolve(ctx context.Context, p *browser.Page, c Challenge) (Result, error)
+	Resolve(ctx context.Context, p browser.Page, c Challenge) (Result, error)
 	Outcome(ctx context.Context, solveID string, accepted bool) error
 	Exhausted(c Challenge) bool
 }

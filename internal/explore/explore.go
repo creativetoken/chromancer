@@ -54,7 +54,7 @@ type TraceStep struct {
 }
 
 // AuthCheck reports whether the current page still looks authenticated.
-type AuthCheck func(ctx context.Context, p *browser.Page, st perceive.State) bool
+type AuthCheck func(ctx context.Context, p browser.Page, st perceive.State) bool
 
 // Relogin re-establishes the session (and reloads) when it drops mid-crawl.
 type Relogin func(ctx context.Context) error
@@ -71,7 +71,7 @@ const (
 
 // Explorer crawls an authenticated app like a normal user.
 type Explorer struct {
-	Page        *browser.Page
+	Page        browser.Page
 	Perceiver   perceive.Perceiver
 	Budget      core.Budget
 	Audit       audit.AuditLog

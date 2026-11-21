@@ -1,7 +1,9 @@
-// Package browser wraps go-rod: launching Chrome with a persistent profile per
-// account (and an optional upstream proxy), pages, SPA-stable waiting, session
-// state export/import and a CDP network subscription for the AuthRecorder.
-package browser
+// Package rodbackend is the go-rod/Chromium implementation of the browser
+// interfaces. It launches Chrome with a persistent profile per account (and an
+// optional upstream proxy), applies a de-headlessed user agent + client hints,
+// and implements Browser/Page/Frame/Element/Value. It is the ONLY package that
+// imports go-rod; it registers itself as the "chromium" backend in init.
+package rodbackend
 
 import (
 	"context"
@@ -10,28 +12,21 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
+
+	"github.com/creativetoken/chromancer/internal/browser"
 )
 
-// Options configures a browser launch.
-type Options struct {
-	Headless   bool
-	ProfileDir string // persistent user-data-dir (one per account)
-	ProxyURL   string // optional upstream proxy
-	UserAgent  string // optional UA override
-	ChromeBin  string // optional explicit binary
-	Logger     func(format string, args ...any)
-}
+func init() { browser.Register("chromium", Launch) }
 
-// Browser is one launched Chrome bound to one account's persistent profile.
-type Browser struct {
+// rodBrowser is one launched Chrome bound to one account's persistent profile.
+type rodBrowser struct {
 	rb     *rod.Browser
 	l      *launcher.Launcher
-	opts   Options
+	opts   browser.Options
 	ua     string
 	uaMeta *proto.EmulationUserAgentMetadata // Sec-CH-UA client hints, headless marker stripped
 }
@@ -58,8 +53,9 @@ func FindChrome(override string) (string, bool) {
 	return launcher.LookPath()
 }
 
-// Launch starts Chrome. If no local binary is found, rod downloads one.
-func Launch(ctx context.Context, o Options) (*Browser, error) {
+// Launch starts Chrome. If no local binary is found, rod downloads one. It is
+// the registered "chromium" backend Factory.
+func Launch(ctx context.Context, o browser.Options) (browser.Browser, error) {
 	l := launcher.New().
 		Headless(o.Headless).
 		Set("disable-blink-features", "AutomationControlled").
@@ -88,7 +84,7 @@ func Launch(ctx context.Context, o Options) (*Browser, error) {
 		l.Kill()
 		return nil, fmt.Errorf("browser: connect: %w", err)
 	}
-	b := &Browser{rb: rb, l: l, opts: o}
+	b := &rodBrowser{rb: rb, l: l, opts: o}
 	// Resolve the effective user agent and matching client hints once, with the
 	// "HeadlessChrome" marker stripped so a headless run does not announce itself.
 	if p, err := rb.Page(proto.TargetCreateTarget{URL: "about:blank"}); err == nil {
@@ -197,7 +193,7 @@ func resolveUA(p *rod.Page, override string) (string, *proto.EmulationUserAgentM
 
 // applyUA sets the resolved UA and client hints on a page. A no-op if the UA
 // could not be resolved.
-func (b *Browser) applyUA(p *rod.Page) error {
+func (b *rodBrowser) applyUA(p *rod.Page) error {
 	if b.ua == "" {
 		return nil
 	}
@@ -205,13 +201,17 @@ func (b *Browser) applyUA(p *rod.Page) error {
 }
 
 // UserAgent returns the browser's effective user agent string.
-func (b *Browser) UserAgent() string { return b.ua }
+func (b *rodBrowser) UserAgent() string { return b.ua }
 
-// Rod exposes the underlying rod browser for advanced callers.
-func (b *Browser) Rod() *rod.Browser { return b.rb }
+// Capabilities reports the Chromium backend's capabilities. It applies UA /
+// client-hint Emulation overrides and runs headless/headful without a virtual
+// display.
+func (b *rodBrowser) Capabilities() browser.Capabilities {
+	return browser.Capabilities{Name: "chromium", SupportsUAOverride: true}
+}
 
 // Close shuts the browser down and releases the profile lock.
-func (b *Browser) Close() error {
+func (b *rodBrowser) Close() error {
 	var first error
 	if b.rb != nil {
 		if err := b.rb.Close(); err != nil {
@@ -226,7 +226,7 @@ func (b *Browser) Close() error {
 }
 
 // NewPage opens a blank tab bound to ctx.
-func (b *Browser) NewPage(ctx context.Context) (*Page, error) {
+func (b *rodBrowser) NewPage(ctx context.Context) (browser.Page, error) {
 	p, err := b.rb.Page(proto.TargetCreateTarget{URL: "about:blank"})
 	if err != nil {
 		return nil, fmt.Errorf("browser: new page: %w", err)
@@ -238,14 +238,13 @@ func (b *Browser) NewPage(ctx context.Context) (*Page, error) {
 	if err := (proto.NetworkEnable{}).Call(p); err != nil {
 		return nil, fmt.Errorf("browser: enable network: %w", err)
 	}
-	return &Page{rp: p.Context(ctx), b: b}, nil
+	return &rodPage{rp: p.Context(ctx), b: b}, nil
 }
 
-func (b *Browser) logf(format string, args ...any) {
+func (b *rodBrowser) logf(format string, args ...any) {
 	if b.opts.Logger != nil {
 		b.opts.Logger(format, args...)
 	}
 }
 
-// DefaultStableTimeout bounds WaitStable.
-const DefaultStableTimeout = 8 * time.Second
+var _ browser.Browser = (*rodBrowser)(nil)

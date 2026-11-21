@@ -21,6 +21,61 @@ type Config struct {
 	Capture   CaptureWindow
 	LLM       LLMConfig
 	StepLimit int // max agent steps per job before "stuck"
+
+	// Backend selects the browser engine ("chromium" | "camoufox"), default
+	// "chromium". BackendByTarget pins a specific target host to a backend,
+	// overriding Backend for that host (host matched case-insensitively).
+	Backend         string
+	BackendByTarget map[string]string
+}
+
+// BackendFor returns the backend to use for a target URL/host: a per-target
+// override if one matches the host, else the global Backend, else "chromium".
+func (c Config) BackendFor(target string) string {
+	host := hostOf(target)
+	if host != "" && len(c.BackendByTarget) > 0 {
+		if b := c.BackendByTarget[strings.ToLower(host)]; b != "" {
+			return b
+		}
+	}
+	if c.Backend != "" {
+		return c.Backend
+	}
+	return "chromium"
+}
+
+// hostOf extracts the lowercase host[:port] from a URL or bare host string.
+func hostOf(target string) string {
+	s := target
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if j := strings.IndexAny(s, "/?#"); j >= 0 {
+		s = s[:j]
+	}
+	return strings.ToLower(s)
+}
+
+// parseBackendTargets parses "host=backend,host2=backend2" into a map.
+func parseBackendTargets(s string) map[string]string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		kv := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		host, backend := strings.ToLower(strings.TrimSpace(kv[0])), strings.TrimSpace(kv[1])
+		if host != "" && backend != "" {
+			out[host] = backend
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // CaptureWindow bounds the post-login recording.
@@ -74,15 +129,26 @@ func Default() Config {
 		}
 	}
 	return Config{
-		Workspace: ws,
-		Headless:  strings.ToLower(os.Getenv("AGENTBROWSER_HEADFUL")) != "1",
-		ProxyURL:  os.Getenv("AGENTBROWSER_PROXY"),
-		UserAgent: os.Getenv("AGENTBROWSER_UA"), // optional; empty = real Chrome UA, headless marker stripped
-		Timeout:   5 * time.Minute,
-		Capture:   CaptureWindow{N: 20, T: 10 * time.Second},
-		LLM:       LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov)},
-		StepLimit: 40,
+		Workspace:       ws,
+		Headless:        strings.ToLower(os.Getenv("AGENTBROWSER_HEADFUL")) != "1",
+		ProxyURL:        os.Getenv("AGENTBROWSER_PROXY"),
+		UserAgent:       os.Getenv("AGENTBROWSER_UA"), // optional; empty = real Chrome UA, headless marker stripped
+		Timeout:         5 * time.Minute,
+		Capture:         CaptureWindow{N: 20, T: 10 * time.Second},
+		LLM:             LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov)},
+		StepLimit:       40,
+		Backend:         backendDefault(),
+		BackendByTarget: parseBackendTargets(os.Getenv("AGENTBROWSER_BACKEND_TARGETS")),
 	}
+}
+
+// backendDefault reads AGENTBROWSER_BACKEND (default "chromium").
+func backendDefault() string {
+	b := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTBROWSER_BACKEND")))
+	if b == "" {
+		return "chromium"
+	}
+	return b
 }
 
 // Workspace describes the on-disk layout for one account.

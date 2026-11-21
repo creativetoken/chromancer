@@ -176,7 +176,7 @@ func IsSSOOnly(st perceive.State) bool {
 
 // FlowDeps is what a FlowHandler needs to act.
 type FlowDeps struct {
-	Page      *browser.Page
+	Page      browser.Page
 	Perceiver perceive.Perceiver
 	Log       func(kind string, payload map[string]any)
 	Trace     func(format string, args ...any)

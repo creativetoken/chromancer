@@ -62,7 +62,7 @@ type recordInjector struct {
 }
 
 func (r *recordInjector) Vendor() Vendor { return r.vendor }
-func (r *recordInjector) Apply(_ context.Context, _ *browser.Page, _ Challenge, res Result) error {
+func (r *recordInjector) Apply(_ context.Context, _ browser.Page, _ Challenge, res Result) error {
 	r.applied = append(r.applied, res)
 	return nil
 }

@@ -58,6 +58,7 @@ type Authenticator struct {
 	OnRecovering func(step int, reason string)
 
 	trace          handback.Trace
+	backend        browser.Capabilities // the engine this run used (recorded in trace + bundle)
 	base           Baseline
 	pendingSolve   string
 	pendingPayload string // token/text of the pending solve (for the reached-backend check)
@@ -68,7 +69,7 @@ type Authenticator struct {
 // else runs the login/signup flow, handles verification/CAPTCHA via the
 // provided hooks, detects success, captures the post-login window, builds the
 // SessionBundle, runs the replayability check and writes the artefacts.
-func (a *Authenticator) Run(ctx context.Context, b *browser.Browser, mode Mode, hints Hints) (handback.Result, error) {
+func (a *Authenticator) Run(ctx context.Context, b browser.Browser, mode Mode, hints Hints) (handback.Result, error) {
 	if a.Perceiver == nil {
 		a.Perceiver = perceive.New()
 	}
@@ -82,6 +83,9 @@ func (a *Authenticator) Run(ctx context.Context, b *browser.Browser, mode Mode, 
 		a.Capture = handback.CaptureWindow{N: 20, T: 10 * time.Second}
 	}
 	a.trace = handback.Trace{StartedAt: time.Now().UTC(), Timings: map[string]string{}}
+	caps := b.Capabilities()
+	a.trace.Backend, a.trace.BackendVersion = caps.Name, caps.Version
+	a.backend = caps
 
 	p, err := b.NewPage(ctx)
 	if err != nil {
@@ -110,7 +114,7 @@ func (a *Authenticator) Run(ctx context.Context, b *browser.Browser, mode Mode, 
 	return a.finish(ctx, p, rec)
 }
 
-func (a *Authenticator) tryRestore(ctx context.Context, p *browser.Page, rec *handback.Recorder) (bool, handback.Result, bool) {
+func (a *Authenticator) tryRestore(ctx context.Context, p browser.Page, rec *handback.Recorder) (bool, handback.Result, bool) {
 	if a.Sessions == nil {
 		return false, handback.Result{}, false
 	}
@@ -150,7 +154,7 @@ func (a *Authenticator) tryRestore(ctx context.Context, p *browser.Page, rec *ha
 	return true, res, true
 }
 
-func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
+func (a *Authenticator) authenticate(ctx context.Context, p browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
 	// Flow start, captured BEFORE the first form submit. A verification code is
 	// sent when the form is submitted (below), so this is the lower bound for
 	// "code newer than the flow" — set it here, not in resolve (which runs after
@@ -229,7 +233,7 @@ func (a *Authenticator) authenticate(ctx context.Context, p *browser.Page, rec *
 // (captured by authenticate before the first submit): verification only accepts
 // a code/link newer than it, so a stale code from an earlier attempt is never
 // grabbed while the code this flow just triggered still qualifies.
-func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode, since time.Time) error {
+func (a *Authenticator) resolve(ctx context.Context, p browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode, since time.Time) error {
 	maxSteps := a.MaxSteps
 	if maxSteps == 0 {
 		maxSteps = 6
@@ -238,6 +242,7 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 	verified := false
 	handoffUsed := false
 	agentUsed := false
+	agentAuthed := false
 	actedHash := map[perceive.StateHash]int{}
 	// recover hands a dead end (stuck / unknown flow / verify timeout) to the LLM
 	// agent first (when one is configured and the trigger is eligible), then to a
@@ -261,6 +266,11 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 				a.log("agent_takeover", map[string]any{"reason": string(reason), "result": "error", "error": err.Error()})
 			}
 			if ok {
+				// The agent reached authentication and confirmed it via the
+				// authoritative success gate (cookies/XHR). Trust that instead of
+				// re-reading the DOM, which on a slower engine may still show the
+				// prior verify/login form mid-navigation.
+				agentAuthed = true
 				for k := range actedHash {
 					delete(actedHash, k)
 				}
@@ -288,13 +298,20 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 		if err != nil {
 			return fmt.Errorf("auth: perceive: %w", err)
 		}
+		// A successful agent takeover already confirmed authentication; finish now
+		// rather than re-detecting the flow on a DOM that may lag the login.
+		if agentAuthed {
+			a.trace.Add("agent takeover confirmed authentication; finishing")
+			a.settleSolve(ctx, true, rec)
+			return nil
+		}
 		// Verification is checked first: a page asking for a code/link is never
 		// "done", even if the URL changed (a weak success signal).
 		if vs := DetectVerifyStep(st); vs.Needed {
 			if a.Verifier == nil {
 				return fmt.Errorf("%w: verification required (%s) but no provider configured", ErrFlowFailed, vs.Channel)
 			}
-			if err := a.doVerify(ctx, p, deps, vs, &since); err != nil {
+			if err := a.doVerify(ctx, p, deps, vs, &since, 0); err != nil {
 				// A verification that never arrived is a recovery trigger — the
 				// agent can resend or try another channel.
 				if errors.Is(err, ErrVerifyTimeout) {
@@ -413,7 +430,7 @@ func (a *Authenticator) resolve(ctx context.Context, p *browser.Page, rec *handb
 // captchaHook returns the pre-submit CAPTCHA hook for the flow handlers: it
 // detects a challenge, resolves it through the chain (injecting the token), and
 // escalates to a human when the chain is exhausted or unsupported.
-func (a *Authenticator) captchaHook(p *browser.Page) func(context.Context) error {
+func (a *Authenticator) captchaHook(p browser.Page) func(context.Context) error {
 	if a.Captcha == nil {
 		return nil
 	}
@@ -524,8 +541,11 @@ func (a *Authenticator) doHandoff(ctx context.Context, reason captcha.BlockReaso
 }
 
 // doVerify fetches a code/link and applies it to the page.
-func (a *Authenticator) doVerify(ctx context.Context, p *browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time) error {
-	vd := a.VerifyTimeout
+func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time, verifyFor time.Duration) error {
+	vd := verifyFor
+	if vd <= 0 {
+		vd = a.VerifyTimeout
+	}
 	if vd <= 0 {
 		vd = 90 * time.Second
 	}
@@ -578,13 +598,13 @@ func (a *Authenticator) doVerify(ctx context.Context, p *browser.Page, deps Flow
 	return p.WaitStable(ctx, browser.DefaultStableTimeout)
 }
 
-func mustPerceive(ctx context.Context, a *Authenticator, p *browser.Page) perceive.State {
+func mustPerceive(ctx context.Context, a *Authenticator, p browser.Page) perceive.State {
 	st, _, _ := a.Perceiver.Perceive(ctx, p)
 	return st
 }
 
 // gotoLogin navigates to the login entrypoint (used when switching from signup).
-func (a *Authenticator) gotoLogin(ctx context.Context, p *browser.Page) error {
+func (a *Authenticator) gotoLogin(ctx context.Context, p browser.Page) error {
 	res := &entry.Resolver{CacheDir: a.EntryCache}
 	check := func(st perceive.State, m entry.Mode) (bool, string) { return IsAuthForm(st, Login) }
 	_, err := res.Resolve(ctx, a.Target, a.Target, entry.Mode(Login), nil, entry.Deps{
@@ -607,7 +627,7 @@ func (a *Authenticator) pickHandler(st perceive.State) FlowHandler {
 
 // capture runs the post-login window, builds the bundle, replay-checks it and
 // writes the artefacts.
-func (a *Authenticator) capture(ctx context.Context, p *browser.Page, rec *handback.Recorder, landing string) (handback.Result, error) {
+func (a *Authenticator) capture(ctx context.Context, p browser.Page, rec *handback.Recorder, landing string) (handback.Result, error) {
 	// Load the landing page once so there is always something to capture.
 	if landing == "" {
 		landing = p.URL()
@@ -636,6 +656,7 @@ func (a *Authenticator) capture(ctx context.Context, p *browser.Page, rec *handb
 		Target: a.Target, Account: a.Account, Origin: state.Origin,
 		Cookies: state.Cookies, LocalStorage: state.LocalStorage, SessionStorage: state.SessionStorage,
 		AuthHeaders: authHeaders, UserAgent: state.UserAgent, LandingURL: landing, CapturedAt: time.Now().UTC(),
+		Backend: a.backend.Name, BackendVersion: a.backend.Version,
 	}
 	// Token expiry from bearer/JWT in headers or storage.
 	vals := []string{authHeaders["authorization"]}
@@ -671,7 +692,7 @@ func (a *Authenticator) capture(ctx context.Context, p *browser.Page, rec *handb
 	return handback.Result{BundleRef: bref, RecordingRef: rref, Trace: a.trace}, nil
 }
 
-func (a *Authenticator) finish(ctx context.Context, p *browser.Page, rec *handback.Recorder) (handback.Result, error) {
+func (a *Authenticator) finish(ctx context.Context, p browser.Page, rec *handback.Recorder) (handback.Result, error) {
 	landing := p.URL()
 	return a.capture(ctx, p, rec, landing)
 }

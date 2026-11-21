@@ -53,6 +53,11 @@ type HumanHandoff struct {
 	Headful  bool   // if true, view_url is empty (operator acts at the machine)
 	ViewBase string // e.g. "http://127.0.0.1:9222" for a remote DevTools/screencast view
 
+	// ViewProvider, when set, builds the operator's view URL for a handoff from
+	// the minted one-time token and challenge id — e.g. a token-guarded noVNC onto
+	// a backend's virtual display. It overrides Headful/ViewBase. Optional.
+	ViewProvider func(token, challenge string) (string, error)
+
 	mu     sync.Mutex
 	tokens map[string]bool
 }
@@ -95,7 +100,14 @@ func (h *HumanHandoff) Escalate(ctx context.Context, reason BlockReason, deadlin
 	cid := "handoff-" + hexStamp()
 	req := HandoffRequest{ChallengeID: cid, Reason: reason, ExpiresAt: deadline}
 	var token string
-	if !h.Headful && h.ViewBase != "" {
+	switch {
+	case h.ViewProvider != nil:
+		token = h.mintToken()
+		defer h.revoke(token)
+		if u, err := h.ViewProvider(token, cid); err == nil {
+			req.ViewURL = u
+		}
+	case !h.Headful && h.ViewBase != "":
 		token = h.mintToken()
 		req.ViewURL = fmt.Sprintf("%s/?token=%s&challenge=%s", h.ViewBase, token, cid)
 		defer h.revoke(token)

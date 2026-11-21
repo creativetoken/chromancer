@@ -74,6 +74,30 @@ func assertPrimarySucceeded(t *testing.T, res handback.Result, policy *lab.Polic
 	}
 }
 
+// TestE2EAgentPrimaryPasswordApps runs the agent-primary driver (lab policy)
+// across the lab auth apps that need only a password (no verification channel),
+// asserting each signs in via the check_logged_in gate.
+func TestE2EAgentPrimaryPasswordApps(t *testing.T) {
+	skipUnlessE2E(t)
+	apps := []string{
+		"simple", "multistep", "modal", "iframe", "spa-jwt",
+		"hidden-entry", "bound-session", "form-errors", "hydration-login",
+	}
+	for _, app := range apps {
+		app := app
+		t.Run(app, func(t *testing.T) {
+			h := newHarness(t)
+			e := h.expect(app)
+			policy := lab.NewPolicyModel()
+			res, err := h.runAgentPrimary(t, app, identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+			if err != nil {
+				t.Fatalf("agent-primary %s should succeed: %v (trace %+v)", app, err, res.Trace)
+			}
+			assertPrimarySucceeded(t, res, policy, e.Password)
+		})
+	}
+}
+
 func TestE2EAgentPrimarySimple(t *testing.T) {
 	skipUnlessE2E(t)
 	h := newHarness(t)

@@ -192,6 +192,15 @@ func (p *PolicyModel) decide(o observation, avail map[string]bool) act {
 		return act{"action": "click", "id": btn.id, "why": "continue through the interstitial"}
 	}
 
+	// 9b. No form on this page but a "Sign in" / "Members area" control that opens
+	// one (a modal trigger or an entry link) → click it to reveal the form.
+	if o.passwordField == nil && o.codeField == nil && o.identifierField == nil {
+		if op := o.loginOpener; op != nil && !p.clicked[op.id] {
+			p.clicked[op.id] = true
+			return act{"action": "click", "id": op.id, "why": "open the sign-in form"}
+		}
+	}
+
 	// 10. Nothing to fill and we have submitted something → confirm the session.
 	if has("check_logged_in") {
 		p.checks++
@@ -240,14 +249,16 @@ type observation struct {
 	loginFilled      bool
 	verifyFailed     bool
 
-	identifierField *element
-	passwordField   *element
-	codeField       *element
-	submitButton    *element
-	primaryButton   *element
-	agreeCheckbox   *element
-	resendCtl       *element
-	firstNavigable  *element
+	identifierField  *element
+	passwordField    *element
+	codeField        *element
+	submitButton     *element
+	submitCandidates []*element
+	primaryButton    *element
+	agreeCheckbox    *element
+	resendCtl        *element
+	loginOpener      *element
+	firstNavigable   *element
 }
 
 var (
@@ -269,6 +280,7 @@ var (
 	submitRe    = regexp.MustCompile(`(?i)^(log ?in|sign ?in|submit|continue|next|verify|confirm)$`)
 	primaryRe   = regexp.MustCompile(`(?i)^(continue.*|proceed.*|confirm.*|trust this device|got it|next|verify|yes.*|allow.*|i agree.*|accept.*)$`)
 	avoidRe     = regexp.MustCompile(`(?i)(delete|remove|close account|deactivate|cancel|log ?out|sign ?out)`)
+	openerRe    = regexp.MustCompile(`(?i)^(sign ?in|log ?in|login|enter|members?( area| portal)?|get started|my account|account)$`)
 	// credRejectRe matches a hard credentials rejection (wrong password / unknown
 	// account), as opposed to a transient "something went wrong, try again".
 	credRejectRe = regexp.MustCompile(`(?i)(incorrect|invalid|wrong|not ?recogni[sz]ed|bad)[^.]{0,24}(password|e-?mail|username|credential|login|account)|invalid credentials|(password|e-?mail|username)[^.]{0,24}(incorrect|invalid|wrong)`)
@@ -298,7 +310,10 @@ func parseObservation(obs string) observation {
 	o.botWall = botWallRe.MatchString(hay)
 	o.consentBanner = consentRe.MatchString(hay) && hasConsentButton(o.elems)
 	o.asksForCode = codeAskRe.MatchString(hay)
-	o.credsRejected = credRejectRe.MatchString(hay)
+	// A credentials rejection is judged from the alert/title ONLY — never the full
+	// page DATA, where the alert text runs into form labels ("…wrong, please try
+	// again Email Password…") and yields false positives.
+	o.credsRejected = credRejectRe.MatchString(o.title + " " + o.message)
 	o.wantLink = linkAskRe.MatchString(hay)
 	o.needsResendFirst = noCodeYetRe.MatchString(hay) && !codeAlreadySent(hay)
 	switch {
@@ -348,8 +363,8 @@ func parseObservation(obs string) observation {
 			if o.resendCtl == nil && resendRe.MatchString(name) {
 				o.resendCtl = e
 			}
-			if o.submitButton == nil && submitRe.MatchString(name) && !avoidRe.MatchString(name) {
-				o.submitButton = e
+			if !avoidRe.MatchString(name) && !resendRe.MatchString(name) {
+				o.submitCandidates = append(o.submitCandidates, e)
 			}
 			if o.primaryButton == nil && primaryRe.MatchString(name) && !avoidRe.MatchString(name) {
 				o.primaryButton = e
@@ -357,6 +372,9 @@ func parseObservation(obs string) observation {
 			if captchaRe.MatchString(name) {
 				o.hasCaptchaWidget = true
 			}
+		}
+		if o.loginOpener == nil && (isButton(e) || e.kind == "a") && openerRe.MatchString(strings.TrimSpace(e.name)) && !avoidRe.MatchString(e.name) {
+			o.loginOpener = e
 		}
 		if o.firstNavigable == nil && (isButton(e) || e.kind == "a") && !avoidRe.MatchString(e.name) {
 			o.firstNavigable = e
@@ -368,11 +386,42 @@ func parseObservation(obs string) observation {
 	if captchaRe.MatchString(hay) && !o.botWall {
 		o.hasCaptchaWidget = true
 	}
-	// A bare identifier-only step still needs its own submit button fallback.
+	// Choose the form's submit control from the candidate buttons, preferring a
+	// real type=submit over a same-named type=button (e.g. a modal's header "Sign
+	// in" opener vs the form's submit), then a submit-worded button, then any.
+	o.submitButton = pickSubmit(o.submitCandidates)
 	if o.submitButton == nil {
 		o.submitButton = o.primaryButton
 	}
 	return o
+}
+
+// pickSubmit chooses the best submit control: a real type=submit button, else a
+// submit-worded button, else the first candidate. type=button controls (JS
+// toggles like a modal opener) are only used as a last resort.
+func pickSubmit(cands []*element) *element {
+	var submitTyped, named, plain *element
+	for _, e := range cands {
+		switch {
+		case e.typ == "submit" && submitTyped == nil:
+			submitTyped = e
+		case submitRe.MatchString(strings.TrimSpace(e.name)) && e.typ != "button" && named == nil:
+			named = e
+		case e.typ != "button" && plain == nil:
+			plain = e
+		}
+	}
+	switch {
+	case submitTyped != nil:
+		return submitTyped
+	case named != nil:
+		return named
+	case plain != nil:
+		return plain
+	case len(cands) > 0:
+		return cands[0]
+	}
+	return nil
 }
 
 func isTextInput(e *element) bool {

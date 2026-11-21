@@ -7,6 +7,12 @@ that was granted out of band. It can fetch these itself from the operator's real
 Twilio numbers and Gmail mailbox, generate TOTP codes locally, or fall back to
 asking you (CLI) or your tool (MCP).
 
+In agent-only mode (ADR 0017) the LLM agent invokes verification through two
+tools — `enter_verification(channel, want)` fetches the current code or magic
+link from the account's own channel and enters it, and `resend_verification`
+requests a fresh one — so the agent never sees or types the code itself: it only
+chooses the channel and when to act. The provider chain below backs those tools.
+
 ## Resources config
 
 Describe the operator's numbers, mailboxes and accounts in a YAML file and point

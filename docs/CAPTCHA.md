@@ -9,6 +9,13 @@ hit) does it escalate to a human.
 Core owns all browser contact (`Detector`, `Injector`); **solvers only solve** —
 they receive a `Challenge` and return a `Result`, never touching the page.
 
+In agent-only mode (ADR 0017) the LLM agent triggers this pipeline with a single
+`solve_captcha` tool on the current page; detection, the solver chain, injection
+and the acceptance check all run exactly as below. The agent decides *when* to
+solve (typically after filling the form, before submitting) and escalates to a
+human via `request_human` when the page is a bot-wall rather than a solvable
+challenge.
+
 ## Detection (`internal/captcha/detect.go`)
 
 One **unified detector** runs a single DOM probe and a pure classifier. The same

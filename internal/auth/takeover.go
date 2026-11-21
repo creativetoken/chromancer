@@ -403,16 +403,23 @@ func (a *Authenticator) agentResend(ctx context.Context, p browser.Page, deps Fl
 	return nil
 }
 
-// agentSolveCaptcha runs the existing captcha hook on the current page.
+// agentSolveCaptcha runs the existing captcha hook on the current page. It is
+// idempotent: once a solve is pending (token injected, not yet settled), a
+// repeat call does NOT re-run the solver chain — which would exhaust it and hand
+// off — but tells the agent to submit. This matters with weaker models that
+// re-call solve_captcha because the widget is still visible after a solve.
 func (a *Authenticator) agentSolveCaptcha(ctx context.Context, p browser.Page) (string, error) {
 	hook := a.captchaHook(p)
 	if hook == nil {
 		return "no captcha solver configured", nil
 	}
+	if a.pendingSolve != "" {
+		return "captcha already solved — submit the form now", nil
+	}
 	if err := hook(ctx); err != nil {
 		return "", err
 	}
-	return "captcha handled", nil
+	return "captcha solved — submit the form now", nil
 }
 
 // agentCheckLoggedIn runs deterministic success detection — the only gate on a

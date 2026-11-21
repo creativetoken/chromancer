@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -90,7 +91,9 @@ type LLMConfig struct {
 	BaseURL  string
 	Model    string
 	JSONMode bool
-	Vision   bool // provider's model can read images (enables the vision CAPTCHA solver)
+	Vision   bool    // provider's model can read images (enables the vision CAPTCHA solver)
+	PriceIn  float64 // USD per 1M input tokens (0 = unknown; enables cost accounting)
+	PriceOut float64 // USD per 1M output tokens
 }
 
 // visionDefault reports whether a provider's hosted models are vision-capable by
@@ -135,11 +138,24 @@ func Default() Config {
 		UserAgent:       os.Getenv("AGENTBROWSER_UA"), // optional; empty = real Chrome UA, headless marker stripped
 		Timeout:         5 * time.Minute,
 		Capture:         CaptureWindow{N: 20, T: 10 * time.Second},
-		LLM:             LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov)},
+		LLM:             LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov), PriceIn: envFloat("AGENTBROWSER_LLM_PRICE_IN"), PriceOut: envFloat("AGENTBROWSER_LLM_PRICE_OUT")},
 		StepLimit:       40,
 		Backend:         backendDefault(),
 		BackendByTarget: parseBackendTargets(os.Getenv("AGENTBROWSER_BACKEND_TARGETS")),
 	}
+}
+
+// envFloat reads a float env var (USD-per-1M-token price), 0 if unset/invalid.
+func envFloat(name string) float64 {
+	s := strings.TrimSpace(os.Getenv(name))
+	if s == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }
 
 // backendDefault reads AGENTBROWSER_BACKEND (default "chromium").

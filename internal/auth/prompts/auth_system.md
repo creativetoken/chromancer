@@ -12,10 +12,14 @@ until `check_logged_in` returns that you are authenticated — the word "done" o
 its own proves nothing. Work only with the controls that are actually on the
 page.
 
-A typical flow: dismiss any cookie/consent banner, fill the login form, submit
-it, clear any interstitial (terms, "trust this device", an account picker),
-enter a verification code or open a magic link if asked, then
-`check_logged_in`.
+A typical flow: dismiss any cookie/consent banner, fill the login form, **solve
+any CAPTCHA on the form before you submit**, submit it, clear any interstitial
+(terms, "trust this device", an account picker), enter a verification code or
+open a magic link if asked, then `check_logged_in`.
+
+If the page shows a CAPTCHA — a widget or any text/label mentioning "captcha",
+"I'm not a robot", reCAPTCHA, hCaptcha or Turnstile — call `solve_captcha`
+FIRST, then submit. Submitting before the CAPTCHA is solved will fail.
 
 # How to act
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/creativetoken/chromancer/internal/app"
@@ -232,6 +233,7 @@ func cmdEval(ctx context.Context, args []string) error {
 	captchaMode := fs.Bool("captcha", false, "benchmark the CAPTCHA solver chain vs the mock vendor apps")
 	crawlMode := fs.Bool("crawl", false, "benchmark the crawl drivers (bfs, llm, hybrid) vs the lab crawl app")
 	authDriver := fs.String("auth-driver", "", "sign-in driver to benchmark: deterministic (default) | agent")
+	only := fs.String("only", "", "comma-separated scenario app names to run (default: all)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -285,6 +287,19 @@ func cmdEval(ctx context.Context, args []string) error {
 	scenarios := eval.DefaultScenarios()
 	if *captchaMode {
 		scenarios = eval.CaptchaScenarios()
+	}
+	if *only != "" {
+		want := map[string]bool{}
+		for _, s := range strings.Split(*only, ",") {
+			want[strings.TrimSpace(s)] = true
+		}
+		var filtered []eval.Scenario
+		for _, sc := range scenarios {
+			if want[sc.App] {
+				filtered = append(filtered, sc)
+			}
+		}
+		scenarios = filtered
 	}
 	rows, err := h.Run(ctx, scenarios)
 	if err != nil {

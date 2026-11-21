@@ -9,12 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/creativetoken/chromancer/internal/audit"
 	"github.com/creativetoken/chromancer/internal/auth"
 	"github.com/creativetoken/chromancer/internal/browser"
-	_ "github.com/creativetoken/chromancer/internal/browser/camoufox"   // register "camoufox" backend
+	"github.com/creativetoken/chromancer/internal/browser/camoufox"     // register "camoufox" backend + its handoff view
 	_ "github.com/creativetoken/chromancer/internal/browser/rodbackend" // register "chromium" backend
 	"github.com/creativetoken/chromancer/internal/captcha"
 	"github.com/creativetoken/chromancer/internal/captcha/plugin"
@@ -170,6 +171,36 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	}
 	if a.Recovery == auth.RecoveryOff {
 		handoff = nil
+	}
+	// When the browser runs on a virtual display (camoufox/Xvfb), expose that
+	// display to a human handoff through the token-guarded noVNC view: the
+	// handoff's one-time token gates every request including the WebSocket. The
+	// view starts lazily on the first escalation and is torn down with the job.
+	if handoff != nil {
+		if caps := b.Capabilities(); caps.Display != "" {
+			handoff.Headful = false
+			var (
+				once sync.Once
+				view *camoufox.VNCView
+				base string
+				verr error
+			)
+			handoff.ViewProvider = func(token, challenge string) (string, error) {
+				once.Do(func() {
+					view = &camoufox.VNCView{Display: caps.Display, Valid: handoff.ValidToken}
+					base, verr = view.Start(bctx)
+				})
+				if verr != nil {
+					return "", verr
+				}
+				return view.ViewURL(base, token), nil
+			}
+			defer func() {
+				if view != nil {
+					view.Close()
+				}
+			}()
+		}
 	}
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,

@@ -18,11 +18,19 @@ Status: in progress — agent-only
             wrong creds → credentials_rejected (no retries). e2e (lab policy, chromium): simple, trust-device,
             terms-modal, injection-blocked, resend-OTP, wrong-password, bot-wall all green. Deterministic path
             untouched (AuthDriver defaults to deterministic; existing takeover e2e still green).
-      - [ ] run the agent-primary suite on the camoufox backend too; expand to the rest of the lab auth apps
-            (multistep/modal/iframe/spa-jwt/hidden-entry/magic-link/otp-sms/totp/form-errors/captcha/signup)
+      - [x] agent-primary breadth (chromium): simple/multistep/modal/iframe/spa-jwt/hidden-entry/bound-session/
+            form-errors/hydration-login + trust/terms/injection/resend-OTP/wrong-password/bot-wall — all green.
+            Lab-policy improvements (submit-control pick, modal/members opener, creds-reject fast-fail) + three
+            underlying correctness fixes (perceive alert nodes; Classify precise alert text; explore re-submit
+            detection) landed. CLI `--auth-driver agent` + App.AuthDriver wired (fail-fast without a model).
+      - [ ] expand agent-primary e2e to the verifier/captcha apps (otp-sms/totp/magic-link/signup-verify/
+            combined-verify/captcha-*) and run the whole suite on the camoufox backend
       - [ ] then DELETE FlowHandler/DefaultHandlers/MultiStepHandler/SignupHandler orchestration, the
             rules-based entry finder + path probing, and the resolve loop (only after full lab e2e both backends)
-      - [ ] crawl: drop bfs/hybrid, keep the single llm loop; `--driver` accepted-but-ignored (deprecation warn)
+      - [x] crawl: `--driver` marked deprecated (one release) with a warning; bfs/hybrid still function until
+            the deletion step drops them for the single llm loop
+      - [x] independent bugs: verify link extraction (entities/utm/anchor) + exact toAlias + charset;
+            chromium version logged + stale warning
       - [ ] recipe replay → hint in the agent's first observation ("last successful path: …")
 - [ ] 2. One agent loop for auth + crawl (prompts/auth_system.md, prompts/crawl_system.md; --prompt). Escalation
       agent → human → failed{reason}; bot-wall → human; wrong creds → fail. Budgets/loop-detection/no-URL-guess.

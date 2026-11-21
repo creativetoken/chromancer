@@ -24,11 +24,41 @@ func init() { browser.Register("chromium", Launch) }
 
 // rodBrowser is one launched Chrome bound to one account's persistent profile.
 type rodBrowser struct {
-	rb     *rod.Browser
-	l      *launcher.Launcher
-	opts   browser.Options
-	ua     string
-	uaMeta *proto.EmulationUserAgentMetadata // Sec-CH-UA client hints, headless marker stripped
+	rb      *rod.Browser
+	l       *launcher.Launcher
+	opts    browser.Options
+	ua      string
+	uaMeta  *proto.EmulationUserAgentMetadata // Sec-CH-UA client hints, headless marker stripped
+	version string                            // Chromium milestone.build, e.g. "121.0.6167.85"
+}
+
+// recentStableChromeMajor is the newest Chrome stable milestone known when this
+// was written (2026-11). It is only a yardstick for the "far behind stable"
+// warning — being behind it is not an error, and the number need not be exact.
+const recentStableChromeMajor = 142
+
+// staleChromeThreshold is how many milestones behind recentStableChromeMajor the
+// running Chromium may be before Launch logs a warning. Chrome ships ~one
+// milestone every 4 weeks, so ~12 ≈ a year out of date.
+const staleChromeThreshold = 12
+
+// chromeMajor parses the leading milestone from a product string like
+// "HeadlessChrome/121.0.6167.85" or a bare version "121.0.6167.85".
+func chromeMajor(product string) int {
+	if i := strings.LastIndex(product, "/"); i >= 0 {
+		product = product[i+1:]
+	}
+	if i := strings.IndexByte(product, '.'); i >= 0 {
+		product = product[:i]
+	}
+	n := 0
+	for _, c := range product {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // FindChrome returns the Chrome/Chromium binary to use: an explicit override,
@@ -85,6 +115,19 @@ func Launch(ctx context.Context, o browser.Options) (browser.Browser, error) {
 		return nil, fmt.Errorf("browser: connect: %w", err)
 	}
 	b := &rodBrowser{rb: rb, l: l, opts: o}
+	// Record and log the Chromium version so every run's engine is traceable;
+	// warn when it is far behind current stable (an old engine drifts from real
+	// browsers and from the perceiver's DOM assumptions).
+	if ver, err := rb.Version(); err == nil && ver != nil {
+		b.version = strings.TrimPrefix(ver.Product, "HeadlessChrome/")
+		b.version = strings.TrimPrefix(b.version, "Chrome/")
+		major := chromeMajor(ver.Product)
+		b.logf("browser: chromium %s (milestone %d)", b.version, major)
+		if major > 0 && recentStableChromeMajor-major >= staleChromeThreshold {
+			b.logf("browser: WARNING chromium milestone %d is far behind stable (~%d); consider updating Chrome — an outdated engine can trip bot detection and DOM perception",
+				major, recentStableChromeMajor)
+		}
+	}
 	// Resolve the effective user agent and matching client hints once, with the
 	// "HeadlessChrome" marker stripped so a headless run does not announce itself.
 	if p, err := rb.Page(proto.TargetCreateTarget{URL: "about:blank"}); err == nil {
@@ -207,7 +250,7 @@ func (b *rodBrowser) UserAgent() string { return b.ua }
 // client-hint Emulation overrides and runs headless/headful without a virtual
 // display.
 func (b *rodBrowser) Capabilities() browser.Capabilities {
-	return browser.Capabilities{Name: "chromium", SupportsUAOverride: true}
+	return browser.Capabilities{Name: "chromium", Version: b.version, SupportsUAOverride: true}
 }
 
 // Close shuts the browser down and releases the profile lock.

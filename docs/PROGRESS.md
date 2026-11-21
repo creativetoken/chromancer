@@ -6,9 +6,15 @@ Status: in progress — agent-only
 > already exists — the refactor PROMOTES it from recovery to the PRIMARY (only) driver.
 
 - [x] 0. Baseline: tag `pre-agent-only`, run `agentbrowser eval` (auth + crawl) → docs/eval/pre-agent-only.md
-- [ ] 1. Remove deterministic drivers (auth handlers/entry-finder/resolve orchestration; crawl bfs/hybrid;
-      recipe replay → hint). Keep the helpers as agent **tools**: fill_login_form, fill_signup_form,
-      enter_verification, resend_verification, solve_captcha, request_human, check_logged_in, dismiss_banner.
+- [~] 1. Remove deterministic drivers + expose helpers as tools:
+      - [x] tool plumbing in `internal/explore` (FillLoginForm/FillSignupForm/DismissBanner callbacks,
+            schema gating, applyAction dispatch, test) — commit 9591802
+      - [x] auth-side callbacks wired into runAgent (agentFillLoginForm/FillSignupForm/DismissBanner) — 3f0efbd
+      - [ ] make the Explorer the PRIMARY auth driver (new agent-primary runner replacing the deterministic
+            `resolve` loop + handlers + entry finder); then DELETE FlowHandler/DefaultHandlers/MultiStepHandler/
+            SignupHandler orchestration, the rules-based entry finder + path probing, and the resolve loop
+      - [ ] crawl: drop bfs/hybrid, keep the single llm loop; `--driver` accepted-but-ignored (deprecation warn)
+      - [ ] recipe replay → hint in the agent's first observation ("last successful path: …")
 - [ ] 2. One agent loop for auth + crawl (prompts/auth_system.md, prompts/crawl_system.md; --prompt). Escalation
       agent → human → failed{reason}; bot-wall → human; wrong creds → fail. Budgets/loop-detection/no-URL-guess.
 - [ ] 3. Real LLM provider required (fail fast without one; OpenAI-compat/Ollama ok). Cheap vs plan model routing.

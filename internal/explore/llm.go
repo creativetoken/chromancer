@@ -83,6 +83,15 @@ func (e *Explorer) buildSchema() json.RawMessage {
 	if e.RequestHuman != nil {
 		actions = append(actions, "request_human")
 	}
+	if e.FillLoginForm != nil {
+		actions = append(actions, "fill_login_form")
+	}
+	if e.FillSignupForm != nil {
+		actions = append(actions, "fill_signup_form")
+	}
+	if e.DismissBanner != nil {
+		actions = append(actions, "dismiss_banner")
+	}
 	actions = append(actions, "give_up")
 	enumJSON, _ := json.Marshal(actions)
 	return json.RawMessage(fmt.Sprintf(`{
@@ -374,6 +383,50 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 			return true, "human handoff error: " + err.Error()
 		}
 		return true, "escalated to a human"
+	case "fill_login_form":
+		if e.FillLoginForm == nil {
+			ts.Outcome = "unknown_action"
+			return false, "fill_login_form is not available"
+		}
+		n := findNode(st, act.ID) // the form (or a field in it); callback re-detects
+		if n != nil {
+			ts.TargetID = act.ID
+		}
+		outcome, err := e.FillLoginForm(ctx, n)
+		if err != nil {
+			ts.Outcome = "fill_error"
+			return false, "fill login form error: " + err.Error()
+		}
+		ts.Outcome = "filled_login"
+		return false, "login form: " + outcome
+	case "fill_signup_form":
+		if e.FillSignupForm == nil {
+			ts.Outcome = "unknown_action"
+			return false, "fill_signup_form is not available"
+		}
+		n := findNode(st, act.ID)
+		if n != nil {
+			ts.TargetID = act.ID
+		}
+		outcome, err := e.FillSignupForm(ctx, n)
+		if err != nil {
+			ts.Outcome = "fill_error"
+			return false, "fill signup form error: " + err.Error()
+		}
+		ts.Outcome = "filled_signup"
+		return false, "signup form: " + outcome
+	case "dismiss_banner":
+		if e.DismissBanner == nil {
+			ts.Outcome = "unknown_action"
+			return false, "dismiss_banner is not available"
+		}
+		outcome, err := e.DismissBanner(ctx)
+		if err != nil {
+			ts.Outcome = "banner_error"
+			return false, "dismiss banner error: " + err.Error()
+		}
+		ts.Outcome = "banner:" + outcome
+		return false, "banner: " + outcome
 	case "give_up":
 		rep.StopReason = "give_up"
 		if r := firstNonEmpty(act.Reason, act.Why); r != "" {

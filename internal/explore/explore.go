@@ -124,6 +124,17 @@ type Explorer struct {
 	// RequestHuman escalates to the human handoff with the model's reason.
 	RequestHuman func(ctx context.Context, reason string) error
 
+	// FillLoginForm fills the login form the model points at (by element id) with
+	// the account's username/password via placeholders the Executor substitutes —
+	// the real values never reach the model. Returns an outcome label. The model
+	// still decides when to submit (a separate submit/click action).
+	FillLoginForm func(ctx context.Context, n *perceive.Node) (string, error)
+	// FillSignupForm is FillLoginForm for a registration form.
+	FillSignupForm func(ctx context.Context, n *perceive.Node) (string, error)
+	// DismissBanner dismisses a cookie/consent banner on the current page (the
+	// privacy-preserving choice). Returns an outcome label.
+	DismissBanner func(ctx context.Context) (string, error)
+
 	// hybrid is set by hybridCrawl so the shared BFS loop hands forms to the LLM.
 	hybrid bool
 }
@@ -132,7 +143,8 @@ type Explorer struct {
 // extra actions in the schema and applyAction.
 func (e *Explorer) takeoverMode() bool {
 	return e.EnterVerification != nil || e.ResendVerification != nil ||
-		e.SolveCaptcha != nil || e.CheckLoggedIn != nil || e.RequestHuman != nil
+		e.SolveCaptcha != nil || e.CheckLoggedIn != nil || e.RequestHuman != nil ||
+		e.FillLoginForm != nil || e.FillSignupForm != nil || e.DismissBanner != nil
 }
 
 // Crawl runs the authenticated exploration starting from the page's current

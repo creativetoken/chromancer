@@ -79,3 +79,24 @@ func actionEnum(t *testing.T, schema string) []string {
 	}
 	return m.Properties.Action.Enum
 }
+
+// TestBuildSchemaAgentTools: the fill/banner tools are advertised only when their
+// callback is wired (same gating as the takeover tools).
+func TestBuildSchemaAgentTools(t *testing.T) {
+	e := &Explorer{
+		FillLoginForm: func(context.Context, *perceive.Node) (string, error) { return "", nil },
+		DismissBanner: func(context.Context) (string, error) { return "", nil },
+		// no FillSignupForm
+	}
+	enum := actionEnum(t, string(e.buildSchema()))
+	got := map[string]bool{}
+	for _, a := range enum {
+		got[a] = true
+	}
+	if !got["fill_login_form"] || !got["dismiss_banner"] {
+		t.Errorf("wired tools not advertised: %v", enum)
+	}
+	if got["fill_signup_form"] {
+		t.Errorf("fill_signup_form must NOT be advertised (callback not set): %v", enum)
+	}
+}

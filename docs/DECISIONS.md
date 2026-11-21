@@ -378,3 +378,15 @@
   by Chain), so a retry reads the same code again. Tests: TestClaimUnclaimAllowsRetry,
   TestChainUnclaimForwards. · alt: claim only after successful entry (loses the
   cross-wait dedup during the attempt).
+- 2026-11-21 · **Icon-only sign-in solved via perceiver naming + prompt, set-of-
+  marks deferred** · bambulab's sign-in is an unlabeled header icon with no
+  sign-in text. Chosen solution: the perceiver names such controls (from
+  svg/alt/title/data-testid/class/href, else "icon (unlabeled)" + position) and
+  the prompt tells the agent to open header account/avatar icons before
+  escalating. This makes the icon reachable from the TEXT observation — the lab
+  e2e (icon-signin app) proves the agent opens the menu and signs in without
+  vision. The planned screenshot + set-of-marks vision escalation is deferred as
+  a separable follow-up: it needs a vision branch in the main Explorer loop and
+  the text-naming path already resolves the lab repro at far lower cost. Revisit
+  if real-site runs show naming is insufficient. · alt: build set-of-marks now
+  (larger change, higher per-step cost, not required to pass the repro).

@@ -22,9 +22,18 @@ Working through the agent-default plan (see DECISIONS.md for choices):
   env (SSH remote); branch pushed. PR title/body ready at scratchpad/PR_BODY.md;
   open via: https://github.com/creativetoken/chromancer/compare/main...feat/agent-only?expand=1
   Proceeding to step 4 on branch feat/icon-signin.
-- [ ] Step 4: icon-only sign-in controls (feat/icon-signin) — new branch off
-  feat/agent-only. Includes the live OTP-entry element/type-stage diagnosis as a
-  follow-up (the field resists rod element ops; needs perceiver/executor work).
+- [~] Step 4: icon-only sign-in controls (branch feat/icon-signin off
+  feat/agent-only). Done: perceiver names unlabeled header controls (svg/alt/
+  title/data-testid/class/href hints, else "icon (unlabeled)" + position);
+  observation shows pos=; lab app `icon-signin` (account icon → dropdown → form);
+  lab policy follows an icon opener; prompt tells the agent to open header icons
+  before request_human. `TestE2EAgentPrimaryIconSignin` passes on chromium
+  (camoufox in progress). Set-of-marks vision escalation deferred (DECISIONS.md —
+  text naming already resolves the repro). Remaining: camoufox e2e confirm; one
+  cold bambulab run (icon-finding) honoring the rate-limit rule.
+  NOTE: the live OTP-entry element/type-stage gap (step 2) is a separate
+  follow-up (the field resists rod element ops; needs executor work) — not fixed
+  on this branch.
 - [ ] Step 5: finalize docs + PROGRESS "Status: complete".
 
 # Agent-only refactor (remove deterministic drivers; an LLM agent decides every step)

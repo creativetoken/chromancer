@@ -15,6 +15,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/agentbrowser ./cmd/agentbrowser
+# Fetch the playwright-go driver (bundled node + Playwright) WITHOUT browsers —
+# the camoufox backend connects to the sidecar, so it needs the driver but not
+# Playwright's own Chromium/Firefox. Lands in /root/.cache/ms-playwright-go.
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+      go run github.com/mxschmitt/playwright-go/cmd/playwright install
 
 # --- runtime with Camoufox + virtual display + VNC ---
 FROM python:3.12-${DEBIAN}
@@ -31,6 +36,8 @@ RUN pip install --no-cache-dir "camoufox[geoip]==${CAMOUFOX_VERSION}" "playwrigh
     && python -m camoufox fetch
 
 COPY --from=build /out/agentbrowser /usr/local/bin/agentbrowser
+# The playwright-go driver (node + Playwright) the binary needs at runtime.
+COPY --from=build /root/.cache/ms-playwright-go /root/.cache/ms-playwright-go
 
 ENV AGENTBROWSER_BACKEND=camoufox
 # python3 (the image default) already has camoufox + playwright importable.

@@ -1,4 +1,40 @@
-Status: in progress — agent default
+Status: complete
+
+## Summary — agent-default push (2026-11-21)
+
+**Done (all on branches; see below).** The agent driver is the CLI default;
+deterministic is deprecated-but-selectable. Live bambulab validation drove three
+real bug fixes (success-detector false positive, verification claim lockout,
+guarded one-time-code typing) and the icon-only sign-in perceiver work, each with
+lab repros + tests. Full unit suite, vet/lint, and agent-primary lab e2e pass;
+`icon-signin` passes on chromium **and** camoufox.
+
+**Not merged — two reasons.** (1) The merge gate requires a live bambulab agent
+login to pass, which it did not: the OTP step times out entering the code into
+bambulab's live field (element/type stage), and live validation was stopped by a
+verification rate limit (4/5 attempts). (2) No `gh`/token in this environment, so
+PRs could not be auto-opened. Both PR bodies are ready (scratchpad/PR_BODY.md for
+step 3) with compare URLs; open + review them manually.
+
+**Open branches / PRs:**
+- `feat/agent-only` → main (step 3): default flip + 3 bug fixes + docs. HELD.
+  Compare: https://github.com/creativetoken/chromancer/compare/main...feat/agent-only?expand=1
+- `feat/icon-signin` → main (step 4): perceiver naming + icon-signin lab (both
+  backends) + prompt rule, on top of feat/agent-only. HELD (same gate).
+
+**Open follow-ups (not done, recorded):**
+1. Live OTP entry into bambulab's code field times out at the element/type stage
+   — needs executor/perceiver work on that specific field (stage diagnostics +
+   20s budget added; couldn't be exercised past the rate limit).
+2. bambulab's account/sign-in header control is absent from the queried DOM for
+   the automated browser (shadow DOM or anti-automation hydration) — the icon
+   naming cannot help an element that is not there. Next levers: shadow-DOM
+   piercing in the perceiver and/or screenshot + set-of-marks vision escalation
+   (deferred, DECISIONS.md), and/or the camoufox anti-detect backend.
+3. Deterministic-orchestration deletion (prior plan) remains staged below.
+
+**Live results:** docs/eval/agent-only.md §3–4 (per-attempt funnels, stages,
+rate-limit, icon-finding). Session restored after every live run.
 
 ## Live validation + agent-default push (2026-11-21)
 Working through the agent-default plan (see DECISIONS.md for choices):

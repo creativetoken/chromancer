@@ -181,13 +181,29 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Pa
 	if wantLink {
 		vs.LinkOnly = true
 	}
-	if err := a.doVerify(ctx, p, deps, vs, since); err != nil {
+	// The agent gets a full verification window, not the (possibly short)
+	// VerifyTimeout that only exists to trigger the deterministic→agent handoff:
+	// once the agent is driving the verification, the code must have time to
+	// arrive and be entered (slower engines like Camoufox need the headroom).
+	if err := a.doVerify(ctx, p, deps, vs, since, a.agentVerifyBudget()); err != nil {
 		return "", err
 	}
 	if vs.LinkOnly {
 		return "verification link opened", nil
 	}
 	return "verification code entered", nil
+}
+
+// agentVerifyBudget is the verification window the agent gets for entering a
+// code/link. It is at least 45s, and never shorter than the configured
+// VerifyTimeout, so the short escalation-trigger timeout does not starve the
+// agent's own verification step.
+func (a *Authenticator) agentVerifyBudget() time.Duration {
+	const min = 45 * time.Second
+	if a.VerifyTimeout > min {
+		return a.VerifyTimeout
+	}
+	return min
 }
 
 // agentResend clicks the page's resend control and advances the since window so

@@ -49,11 +49,19 @@ chromium backend still works everywhere.
 The Playwright major.minor must match across three places, or the sidecar's
 startup check fails with a clear message rather than mis-handshaking:
 
-- `internal/browser/camoufox/version.go` → `PlaywrightVersion`
-- the `playwright-go` module version in `go.mod` (its `v0.MMmm.patch` encodes the
-  Playwright version — e.g. `v0.5200.0` ↔ Playwright `1.52.0`)
+- `internal/browser/camoufox/version.go` → `PlaywrightVersion` (currently `1.61.0`)
+- the `playwright-go` module version in `go.mod` (`github.com/mxschmitt/playwright-go`
+  `v0.6100.0`; its `v0.MMmm.patch` encodes the Playwright version — `v0.6100.0` ↔
+  Playwright `1.61.0`)
 - `PLAYWRIGHT_VERSION` / `CAMOUFOX_VERSION` in `scripts/camoufox-setup.sh` and
   `Dockerfile.camoufox` (the camoufox package pulls a specific Playwright)
+
+**Validated version set (arm64 Linux):** `camoufox 0.5.9` (pip `camoufox[geoip]`),
+`playwright 1.61.0` (camoufox 0.5.9 allows `playwright<1.63`; pinned to 1.61 to
+match the Go client), `playwright-go v0.6100.0`, Camoufox browser build
+`v158.0.1-beta.41` (`camoufox fetch`, ~1.3 GB). Note: camoufox 0.5.9 bundles
+Playwright 1.62 by default, but playwright-go has no 1.62 client yet, so the
+Python side is pinned down to 1.61.
 
 The sidecar reports its Playwright version in the ready line; `CheckPlaywrightVersion`
 rejects a major/minor skew at startup.
@@ -89,13 +97,44 @@ every request gets a flat `401` and never reaches the VNC upstream.
 - **Network bodies** are read as each response finishes; redirect bodies are
   skipped and oversized bodies capped, and a "body unavailable" never aborts the
   recording.
+- **Slower interaction.** Firefox-via-Playwright starts slower (sidecar + Xvfb)
+  and each action takes longer than headless Chrome. One place this mattered: the
+  agent-takeover verification step now gets its own budget (`agentVerifyBudget`,
+  ≥45s) rather than inheriting the short escalation-trigger `VerifyTimeout`, so a
+  code has time to arrive and be entered on the slower engine. All lab e2e flows
+  that pass on chromium also pass on camoufox.
 
-## Bot-detection comparison (live, optional)
+## Validation (arm64 Linux, Docker)
 
-A `live`-tagged check loads a public bot-detection test page on both backends
-from the same IP and records the outcome here. It is not a pass/fail gate; it is
-how we decide whether a given target is worth pinning to camoufox.
+The full lab e2e suite was run with `AGENTBROWSER_E2E_BACKEND=camoufox`. The whole
+suite passes on camoufox, matching chromium. Highlights proven live:
+
+- cookie/JWT/SPA logins, modal and hidden-entry flows, signup+email-verify,
+  magic-link, OTP, form-errors, the hydration race, and the agent-takeover
+  scenarios (including resend-OTP) — all pass on camoufox.
+- **Fingerprint stability**: two runs for one account yield an identical
+  fingerprint; two accounts differ (`TestE2ECamoufoxFingerprintStability`).
+- **Popups/new windows**: `TestE2EPopupLogin` passes on both backends.
+- **Human-handoff view**: a live `x11vnc + websockify/noVNC` behind the token
+  proxy serves the virtual display WITH the token (HTTP 200 / WS 101) and refuses
+  every request WITHOUT it (HTTP/WS 401) — `TestVNCViewTokenGuardLive`.
+- **Sidecar lifecycle**: restart-on-crash + idle-shutdown (`Supervisor`, unit
+  tests) and a clean process-group kill (no orphan Xvfb/Firefox).
+
+## Bot-detection comparison (B0 measurement)
+
+Loaded each page on both backends from this host's Docker IP (login page only, no
+submission). A **measurement**, not a pass/fail gate. Screenshots in `e2e/.b0/`.
+Caveat: a datacenter IP fails IP-reputation checks regardless of engine, so this
+measures fingerprint/headless evasion, not IP reputation.
 
 | Date | Site | chromium | camoufox | Notes |
 |------|------|----------|----------|-------|
-| _(pending a live run on a Linux host with Xvfb)_ | | | | |
+| 2026-11-21 | bot.sannysoft.com | UA Chrome/114 (macOS); WebDriver checks pass | UA **Firefox/158 (Windows)**; WebDriver checks pass | camoufox presents a consistent non-host OS; "Chrome: missing" is expected for Firefox, not a failure |
+| 2026-11-21 | abrahamjuliot.github.io/creepjs | distinct fingerprint id | **different** fingerprint id (Windows Firefox) | both produce a stable FP id; the two engines are clearly distinct |
+| 2026-11-21 | arh.antoinevastel.com/bots/areyouheadless | 502 (site down) | 502 (site down) | site returned nginx 502 for both; no verdict |
+
+Takeaway: camoufox presents a coherent Windows-Firefox identity distinct from the
+host and from the chromium backend, and passes the standard WebDriver/headless
+tells. From a datacenter IP neither engine evades IP-reputation; camoufox's value
+is fingerprint/TLS/JS-surface evasion, best paired with a residential proxy.

@@ -242,6 +242,7 @@ func (a *Authenticator) resolve(ctx context.Context, p browser.Page, rec *handba
 	verified := false
 	handoffUsed := false
 	agentUsed := false
+	agentAuthed := false
 	actedHash := map[perceive.StateHash]int{}
 	// recover hands a dead end (stuck / unknown flow / verify timeout) to the LLM
 	// agent first (when one is configured and the trigger is eligible), then to a
@@ -265,6 +266,11 @@ func (a *Authenticator) resolve(ctx context.Context, p browser.Page, rec *handba
 				a.log("agent_takeover", map[string]any{"reason": string(reason), "result": "error", "error": err.Error()})
 			}
 			if ok {
+				// The agent reached authentication and confirmed it via the
+				// authoritative success gate (cookies/XHR). Trust that instead of
+				// re-reading the DOM, which on a slower engine may still show the
+				// prior verify/login form mid-navigation.
+				agentAuthed = true
 				for k := range actedHash {
 					delete(actedHash, k)
 				}
@@ -292,13 +298,20 @@ func (a *Authenticator) resolve(ctx context.Context, p browser.Page, rec *handba
 		if err != nil {
 			return fmt.Errorf("auth: perceive: %w", err)
 		}
+		// A successful agent takeover already confirmed authentication; finish now
+		// rather than re-detecting the flow on a DOM that may lag the login.
+		if agentAuthed {
+			a.trace.Add("agent takeover confirmed authentication; finishing")
+			a.settleSolve(ctx, true, rec)
+			return nil
+		}
 		// Verification is checked first: a page asking for a code/link is never
 		// "done", even if the URL changed (a weak success signal).
 		if vs := DetectVerifyStep(st); vs.Needed {
 			if a.Verifier == nil {
 				return fmt.Errorf("%w: verification required (%s) but no provider configured", ErrFlowFailed, vs.Channel)
 			}
-			if err := a.doVerify(ctx, p, deps, vs, &since); err != nil {
+			if err := a.doVerify(ctx, p, deps, vs, &since, 0); err != nil {
 				// A verification that never arrived is a recovery trigger — the
 				// agent can resend or try another channel.
 				if errors.Is(err, ErrVerifyTimeout) {
@@ -528,8 +541,11 @@ func (a *Authenticator) doHandoff(ctx context.Context, reason captcha.BlockReaso
 }
 
 // doVerify fetches a code/link and applies it to the page.
-func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time) error {
-	vd := a.VerifyTimeout
+func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time, verifyFor time.Duration) error {
+	vd := verifyFor
+	if vd <= 0 {
+		vd = a.VerifyTimeout
+	}
 	if vd <= 0 {
 		vd = 90 * time.Second
 	}

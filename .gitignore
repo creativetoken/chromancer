@@ -14,3 +14,6 @@ workspace/
 .env
 .env.*
 !.env.example
+
+# B0 bot-detection screenshots (local measurement artefacts)
+.b0/

@@ -117,9 +117,13 @@ func timeoutMs(ctx context.Context) *float64 {
 	return &ms
 }
 
-// run executes a blocking Playwright call while honouring ctx: if ctx is
-// cancelled first, the page is closed to unblock the in-flight op and ctx.Err()
-// is returned (playwright-go has no context parameter of its own).
+// run executes a blocking Playwright call while honouring ctx: it returns
+// ctx.Err() as soon as ctx is done, without waiting for the call (playwright-go
+// has no context parameter). Each call also carries a Playwright timeout derived
+// from the ctx deadline, so the backing goroutine unwinds on its own; the page
+// is NOT closed here — a per-operation deadline (e.g. an 8s perceive) must not
+// tear down the whole session, and true job cancellation is made prompt by the
+// browser Close() on teardown.
 func (p *cfPage) run(ctx context.Context, fn func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -130,7 +134,6 @@ func (p *cfPage) run(ctx context.Context, fn func() error) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		_ = p.pg.Close()
 		return ctx.Err()
 	}
 }

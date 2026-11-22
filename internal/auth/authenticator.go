@@ -70,6 +70,7 @@ type Authenticator struct {
 	base           Baseline
 	pendingSolve   string
 	pendingPayload string // token/text of the pending solve (for the reached-backend check)
+	codeSent       bool   // a "Send code" trigger has been clicked this run (don't re-click: respect the server cooldown)
 }
 
 // Run authenticates (target, account) in the given mode and returns the
@@ -174,6 +175,7 @@ func (a *Authenticator) authenticate(ctx context.Context, p browser.Page, rec *h
 	// sent when the form is submitted (below), so this is the lower bound for
 	// "code newer than the flow" — set it here, not in resolve (which runs after
 	// the submit), or the just-sent code would be excluded.
+	a.codeSent = false
 	since := time.Now()
 	root := a.Target
 	res := &entry.Resolver{CacheDir: a.EntryCache}
@@ -572,12 +574,14 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 	a.log("verification", map[string]any{"channel": string(vs.Channel), "hint": vs.Hint, "link_only": vs.LinkOnly})
 	// Some sites don't dispatch the code until a "Send code" trigger is clicked
 	// (e.g. bambulab's verification modal has a "Send code" button inside the field,
-	// and the code field stays empty until it is pressed). Click it BEFORE fetching
-	// so a code is actually sent, advancing the freshness window to the click so
-	// GetCode waits for the code this click produced. The trigger is often a React
-	// <span onClick> with no onclick attribute/role, so it is invisible to the DOM
-	// perceiver — hence the JS fallback that finds it by text and clicks it directly.
-	if !vs.LinkOnly {
+	// and the code field stays empty until it is pressed). Click it BEFORE fetching,
+	// but ONLY ONCE per sign-in: the server rate-limits re-sends (a cooldown), so
+	// re-clicking on every retry just burns the cooldown and — by advancing the
+	// freshness window each time — discards the code already in flight. On retries
+	// we keep the same window and re-fetch the code this first click produced. The
+	// trigger is often a React <span/div onClick> with no onclick attribute/role, so
+	// it is invisible to the DOM perceiver — hence the JS fallback by text.
+	if !vs.LinkOnly && !a.codeSent {
 		before := time.Now()
 		clicked := ""
 		if vs.SendCode != nil {
@@ -589,8 +593,9 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 			clicked = clickSendCodeJS(ctx, p)
 		}
 		if clicked != "" {
+			a.codeSent = true
 			*since = before
-			a.trace.Add("verification: triggered code delivery (%q)", clicked)
+			a.trace.Add("verification: triggered code delivery (%q)", strings.TrimSpace(clicked))
 			_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
 		}
 	}

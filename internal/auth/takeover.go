@@ -226,6 +226,7 @@ func (a *Authenticator) runAgentPrimary(ctx context.Context, p browser.Page, rec
 	if a.Agent == nil {
 		return fmt.Errorf("%w: agent-primary auth needs an LLM provider", ErrFlowFailed)
 	}
+	a.codeSent = false
 	since := time.Now()
 
 	// Navigate to the entry URL. Prefer the operator hint; fall back to the target

@@ -299,29 +299,55 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 		return err
 	}
 	_ = el.ScrollIntoViewIfNeeded()
+	// Each step is bounded to a few seconds (like rodbackend's 3s per-step budget)
+	// so a guarded field that makes one step block cannot consume the whole
+	// verification budget before the fallback runs — that was the "type timed out"
+	// symptom after the first camoufox OTP fix.
+	short := func(fn func() error) error {
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return p.run(sctx, fn)
+	}
+	stepMs := float64(3000)
+	force := true
 	delay := float64(20)
 	// Normal path (best-effort — errors swallowed; the fallback below recovers).
-	_ = p.run(ctx, func() error { return el.Focus() })
-	_ = p.run(ctx, func() error { return el.Fill("") }) // clear
-	_ = p.run(ctx, func() error {
-		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: timeoutMs(ctx)})
+	_ = short(func() error { return el.Focus() })
+	_ = short(func() error { return el.Fill("", pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) }) // clear
+	_ = short(func() error {
+		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: &stepMs})
 	})
 	// Did the value land? Real key events silently fail on guarded inputs.
-	if v, verr := el.Evaluate("el => el.value"); verr == nil {
-		if s, ok := v.(string); ok && s == text {
-			return nil
+	var got string
+	_ = short(func() error {
+		v, verr := el.Evaluate("el => el.value")
+		if s, ok := v.(string); ok {
+			got = s
 		}
+		return verr
+	})
+	if got == text {
+		return nil
 	}
 	// Fallback: un-guard with a real click, then set the value directly and fire
 	// the input/change events a framework needs to register it.
-	_ = p.run(ctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: timeoutMs(ctx)}) })
-	if _, jerr := el.Evaluate(`(el, v) => {
-		el.focus();
-		el.value = "";
-		el.value = v;
-		el.dispatchEvent(new Event("input", { bubbles: true }));
-		el.dispatchEvent(new Event("change", { bubbles: true }));
-	}`, text); jerr != nil {
+	_ = short(func() error { return el.Click(pw.ElementHandleClickOptions{Force: &force, Timeout: &stepMs}) })
+	var jerr error
+	_ = short(func() error {
+		// Use the element's NATIVE value setter so a React/Vue-controlled input
+		// (which tracks its value through that setter) registers the change — a
+		// plain `el.value = v` is silently reverted by such frameworks.
+		_, jerr = el.Evaluate(`(el, v) => {
+			el.focus();
+			var proto = (el.tagName === 'TEXTAREA') ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+			var d = Object.getOwnPropertyDescriptor(proto, 'value');
+			if (d && d.set) { d.set.call(el, ''); d.set.call(el, v); } else { el.value = ''; el.value = v; }
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		}`, text)
+		return jerr
+	})
+	if jerr != nil {
 		return fmt.Errorf("camoufox: type: %w", jerr)
 	}
 	return nil

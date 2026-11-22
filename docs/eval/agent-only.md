@@ -230,12 +230,19 @@ you prefer to paste the steps, include the whole subshell:
   trap restore EXIT INT TERM
   [ -f "$SESS" ] && mv "$SESS" "$SESS.save"
 
-  docker run --rm -it -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
+  # -p publishes the in-container human-handoff noVNC port to the host, and the
+  # HANDOFF_BIND/ADVERTISE env make its printed URL openable from macOS.
+  docker run --rm -it -p 127.0.0.1:8899:8899 -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
    'set -a; . /src/.env.live; set +a; export AGENTBROWSER_BACKEND=camoufox AGENTBROWSER_WORKSPACE=/src/.workspace AGENTBROWSER_RESOURCES=/src/configs/resources.example.yaml PATH=/usr/local/go/bin:$PATH; \
+    export AGENTBROWSER_HANDOFF_BIND=0.0.0.0:8899 AGENTBROWSER_HANDOFF_ADVERTISE=127.0.0.1; \
     Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & export DISPLAY=:99; sleep 1; \
     go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --login-url https://bambulab.com/en-gb/sign-in'
 )
 ```
+
+If the run reaches a human handoff, it prints a `http://127.0.0.1:8899/vnc.html?…`
+link (token-gated) — open it to see/drive the browser, then press Enter. Without
+the `-p`/`HANDOFF_*` wiring the link points at an in-container port and won't open.
 
 Expectation: on bambulab's unreadable sign-in form the agent should escalate to
 visual mode (it does on the `shadow-login` repro) and drive the fields by

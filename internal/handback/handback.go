@@ -53,6 +53,9 @@ type Trace struct {
 	Captcha         []string          `json:"captcha,omitempty"`
 	AgentTakeover   []string          `json:"agent_takeover,omitempty"`
 	AgentSteps      int               `json:"agent_steps,omitempty"` // number of agent actions (agent-primary / takeover)
+	Screenshots     int               `json:"screenshots,omitempty"` // visual-mode screenshots taken
+	InTokens        int               `json:"in_tokens,omitempty"`   // agent input tokens (incl. image tokens)
+	OutTokens       int               `json:"out_tokens,omitempty"`  // agent output tokens
 	HumanHandoff    string            `json:"human_handoff,omitempty"`
 	Replayable      bool              `json:"replayable"`
 	ReplayReason    string            `json:"replay_reason,omitempty"`

@@ -1,4 +1,74 @@
-Status: complete
+Status: in progress — visual perception (feature complete incl. OTP stale-field fix + visual OTP entry; full agent-primary e2e green on both backends; live bambulab sign-in blocked by the session's auto-mode classifier — needs the operator to run it; PR ready to open)
+
+## Visual perception for the agent (feat/visual-perception, 2026-11-22)
+
+**Goal:** the agent takes screenshots, reasons over them, and acts by set-of-marks
+numbers or coordinates when the DOM can't be read. Definition of done:
+1. `auth --auth-driver agent` logs into bambulab.com COLD (no --login-url, cache
+   cleared) and passes check_logged_in.
+2. closed-shadow-root and canvas-icon lab apps log in via visual mode on chromium
+   AND camoufox.
+3. build/vet/lint + full unit suite + full lab e2e green on both backends.
+
+**Plan / checklist:**
+- [x] 1. `Page.TypeText(ctx, text)` — type into focused element, both backends. (9898a6b)
+- [x] 2. Visual observe step: viewport screenshot → vision model; Go-drawn
+      set-of-marks numbers over perceived nodes (DPR + downscale handled). (c42d733, 41811c5)
+- [x] 3. Actions: `look()`, `click(number)` (coordinate in visual), `click_at(x,y)`,
+      `type_text(text)` + existing scroll/submit/wait/tools. (41811c5)
+- [x] 4. Escalation: text path by default; switch to visual when no sign-in
+      affordance / NeedsVision / 2 steps no progress; drop back when a password
+      field is perceivable. Unit-tested. (41811c5)
+- [x] 5. Perceiver: walk OPEN shadow roots; node rects → coordinate actions
+      resolve shadow/canvas nodes by rect centre (no flat-selector needed). (715c360)
+- [x] 6. Routing: visual steps use VisionModel (app wires it from the router's
+      vision task, e7f334e); screenshots capped (default 10). Image tokens counted
+      via usage. Budget token-spend = minor follow-up.
+- [x] 7. Safety: password focus-editable check (closed-root → unverified+type;
+      wrong target → refuse); placeholders via Executor; click_at audited. (b872697)
+- [x] 8. Lab apps: shadow-login (closed shadow root) passes visual on **chromium
+      AND camoufox**; canvas-signin passes on **chromium**, skipped on camoufox
+      (documented click_at/JS-nav quirk, docs/CAMOUFOX.md). (9c43715)
+- [~] 9. Live bambulab: warm attempt #1 only **restored** a healthy session (no
+      fresh sign-in); the fresh-login attempt was **denied by the harness
+      auto-mode classifier** (autonomous live external login). Session restored.
+      Recorded in docs/eval/agent-only.md §5 with the exact command for the
+      operator to run. **Blocked — needs operator.**
+- [x] 10. ARCHITECTURE §6.7 + README vision config + CAMOUFOX + eval §5 done. PR
+      ready to open (feat/visual-perception → main).
+- [x] 11. OTP stale-field fix: `perceive.MatchNode` re-resolves the code field by
+      stable attributes before typing (never the stale handle); `doVerify`
+      re-perceives right before entry. Lab `verify-rerender` (code input remounted
+      after it is perceived). Green both backends. (e14bf0d, e6c7ea2)
+- [x] 12. Visual OTP entry: `enter_verification(x,y)` enters a non-perceivable
+      (closed-shadow) code field by coordinate — focus + type-into-focus, code
+      never surfaced to the model. Post-login visual escalation when a code is
+      asked for but no field is perceivable. Lab `verify-shadow`. Green both
+      backends. (e14bf0d, e6c7ea2)
+- [x] 13. Run summary: `agentbrowser auth` prints one line
+      (result/driver/backend/mode/steps/screenshots/tokens); §5 live command
+      wrapped in a subshell trap that restores the saved session on ANY exit.
+      (e6c7ea2)
+
+**Status note (2026-11-22):** full visual pipeline built. Visual-apps e2e green on
+both backends (chromium both; camoufox shadow-login pass + canvas skip-with-reason).
+Extensive camoufox debugging logged a backend event-dispatch quirk (coordinate
+click_at does not fire a standalone over-canvas handler; JS navigation ignored) —
+orthogonal to visual perception, which shadow-login proves on camoufox.
+
+**OTP stale-field + visual OTP entry (2026-11-22):** the one-time-code path now
+re-resolves the code field by stable attributes before typing (never the stale
+handle) and can enter a closed-shadow code field by coordinate. Two lab repros —
+`verify-rerender` (remounted code input) and `verify-shadow` (closed-shadow code
+field, entered visually) — pass on **both backends**. Full agent-primary e2e
+re-run green on both backends against the final code (chromium ok 338s; camoufox
+ok 310s; build/vet/lint + 22 unit packages green). `agentbrowser auth` prints a
+one-line run summary; the §5 live command restores the saved session on any exit.
+
+**Live-attempt log (this effort):** _(none — live step still blocked by the
+auto-mode classifier; operator-run only, command in docs/eval/agent-only.md §5)_
+
+---
 
 ## Summary — agent-default push (2026-11-21)
 

@@ -38,6 +38,8 @@ type llmAction struct {
 	Reason  string `json:"reason"`
 	Channel string `json:"channel"` // enter_verification: email|sms|totp
 	Want    string `json:"want"`    // enter_verification: code|link
+	X       int    `json:"x"`       // click_at: viewport x (CSS px)
+	Y       int    `json:"y"`       // click_at: viewport y (CSS px)
 }
 
 // actionSchema constrains the model to one action object. This is the base
@@ -92,6 +94,12 @@ func (e *Explorer) buildSchema() json.RawMessage {
 	if e.DismissBanner != nil {
 		actions = append(actions, "dismiss_banner")
 	}
+	if e.visionAvailable() {
+		// Visual-mode actions. look takes a fresh set-of-marks screenshot;
+		// click(id) acts on a marked node by its centre; click_at(x,y) clicks a
+		// region with no marked node; type_text types into the focused field.
+		actions = append(actions, "look", "click_at", "type_text")
+	}
 	actions = append(actions, "give_up")
 	enumJSON, _ := json.Marshal(actions)
 	return json.RawMessage(fmt.Sprintf(`{
@@ -106,6 +114,8 @@ func (e *Explorer) buildSchema() json.RawMessage {
     "ms": {"type": "integer", "description": "milliseconds to wait (wait action)"},
     "channel": {"type": "string", "enum": ["email","sms","totp"], "description": "verification channel (enter_verification)"},
     "want": {"type": "string", "enum": ["code","link"], "description": "fetch a one-time code or a magic link (enter_verification)"},
+    "x": {"type": "integer", "description": "viewport x in CSS px (click_at)"},
+    "y": {"type": "integer", "description": "viewport y in CSS px (click_at)"},
     "why": {"type": "string", "description": "one line reason for this action"},
     "reason": {"type": "string", "description": "why you are stopping (done / give_up / request_human)"}
   },
@@ -175,7 +185,8 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 		}
 
 		obs := e.observe(st, hash, mem, maxSteps-step, stuckSkips > 0)
-		act, usage := e.decide(ctx, obs)
+		act, usage, visual := e.decideStep(ctx, obs, st)
+		_ = visual
 		if usage != nil {
 			rep.InTokens += usage.InputTokens
 			rep.OutTokens += usage.OutputTokens
@@ -223,6 +234,20 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 		if outcome != "no visible change" {
 			stuckSkips = 0
 		}
+		// Track stalled progress so visual mode can escalate. A no-op, a login-form
+		// fill that found no fields, or an error all count as no progress; a
+		// navigation, a shown message, a successful fill/verify reset it.
+		if isNoProgress(act.Action, outcome) {
+			e.noProgressStreak++
+		} else {
+			e.noProgressStreak = 0
+		}
+		// Once a login form is filled/typed, the form-finding phase is over: later
+		// interstitials/verification pages must not trigger visual escalation.
+		if actAttemptsLogin(act) || act.Action == "enter_verification" || act.Action == "resend_verification" ||
+			strings.Contains(outcome, "login form: filled") || strings.Contains(outcome, "signup form:") {
+			e.loginAttempted = true
+		}
 		mem.record(act, outcome)
 		rep.Trace = append(rep.Trace, ts)
 		if done {
@@ -233,6 +258,7 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 	if rep.StopReason == "" {
 		rep.StopReason = "steps"
 	}
+	rep.Screenshots = e.screenshotsUsed
 	return rep, nil
 }
 
@@ -281,6 +307,24 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 		return false, e.outcomeFrom(ctx, ex.Back(ctx), ts, before)
 	case "scroll":
 		return false, e.outcomeFrom(ctx, ex.Scroll(ctx, act.Dir), ts, before)
+	case "look":
+		// A fresh set-of-marks screenshot is taken on the NEXT decide (visual mode
+		// is already active). This action just yields the turn for that.
+		e.visualActive = true
+		ts.Outcome = "looked"
+		return false, "took a screenshot"
+	case "click_at":
+		if err := ex.ClickAt(ctx, act.X, act.Y, act.Why); err != nil {
+			return false, e.outcomeFrom(ctx, err, ts, before)
+		}
+		return false, e.outcomeFrom(ctx, nil, ts, before)
+	case "type_text":
+		if err := ex.TypeText(ctx, act.Text, act.Why); err != nil {
+			ts.Outcome = "type_text_error"
+			return false, "type_text error: " + err.Error()
+		}
+		ts.Outcome = "typed"
+		return false, "typed into the focused field"
 	case "click", "submit", "type", "select":
 		n := findNode(st, act.ID)
 		if n == nil {
@@ -288,6 +332,18 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 			return false, fmt.Sprintf("no element with id %d on this page", act.ID)
 		}
 		ts.TargetID = act.ID
+		// In visual mode a marked control is acted on by its rect centre (ClickAt),
+		// so a node inside an open shadow root — not resolvable by a flat selector —
+		// is still actionable.
+		if e.visualActive && (act.Action == "click" || act.Action == "submit") {
+			if cx, cy, ok := n.CenterOf(); ok {
+				err := ex.ClickAt(ctx, cx, cy, act.Why)
+				if err == nil && isSubmitLike(n) {
+					rep.FormsSubmitted++
+				}
+				return false, e.outcomeFrom(ctx, err, ts, before)
+			}
+		}
 		var err error
 		switch act.Action {
 		case "click":
@@ -322,7 +378,9 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 		if n != nil {
 			ts.TargetID = act.ID
 		}
-		outcome, err := e.EnterVerification(ctx, n, strings.ToLower(act.Channel), strings.EqualFold(act.Want, "link"))
+		// x,y (when the model supplies them in visual mode) let the callback enter
+		// the code by coordinate for a non-perceivable (closed-shadow) code field.
+		outcome, err := e.EnterVerification(ctx, n, strings.ToLower(act.Channel), strings.EqualFold(act.Want, "link"), act.X, act.Y)
 		if err != nil {
 			ts.Outcome = "verify_error"
 			return false, "verification error: " + err.Error()
@@ -552,6 +610,8 @@ func parseAction(raw []byte) (llmAction, bool) {
 		Want:    jstr(m["want"]),
 		ID:      jint(m["id"]),
 		Ms:      jint(m["ms"]),
+		X:       jint(m["x"]),
+		Y:       jint(m["y"]),
 	}
 	// Some models pass the target field as "element" rather than "id".
 	if a.ID == 0 {

@@ -136,6 +136,90 @@ func (e *Executor) Type(ctx context.Context, n *perceive.Node, text, why string)
 	return nil
 }
 
+// ClickAt clicks a raw viewport coordinate (CSS px). Visual/coordinate mode uses
+// it for a region with no perceivable DOM node (canvas control, closed shadow
+// root), and for a marked node acted on by its rect centre. There is no element
+// label to deny-check, so the guardrail here is the audit record.
+func (e *Executor) ClickAt(ctx context.Context, x, y int, why string) error {
+	cctx, cancel := e.bound(ctx)
+	defer cancel()
+	if err := e.Page.ClickAt(cctx, x, y); err != nil {
+		return err
+	}
+	e.audit(ctx, "action", map[string]any{"kind": "click_at", "x": x, "y": y, "why": why})
+	return nil
+}
+
+// TypeText types into whatever element currently holds focus (visual mode, after
+// a ClickAt focuses a field with no perceivable handle). Secret placeholders are
+// substituted exactly as in Type, so the model never supplies a raw password.
+// Before typing a password placeholder it verifies focus is an editable, non
+// search/URL input (walking open shadow roots); if focus is inside a closed
+// shadow root it cannot verify, so it types anyway and records it unverified; if
+// focus is a wrong (search/URL) or non-editable target it refuses.
+func (e *Executor) TypeText(ctx context.Context, text, why string) error {
+	resolved, usedPlaceholder, err := e.substitute(text)
+	if err != nil {
+		return err
+	}
+	focusNote := ""
+	if strings.Contains(text, "{{account.password}}") {
+		ed := e.focusEditability(ctx)
+		switch ed {
+		case "ok":
+		case "unverified":
+			focusNote = "unverified_focus"
+		default: // "wrong_target" or "none"
+			e.audit(ctx, "flag", map[string]any{"kind": "type_text_wrong_focus", "focus": ed, "why": why})
+			return fmt.Errorf("type_text: focus is not an editable password target (%s); click the password field first", ed)
+		}
+	}
+	cctx, cancel := e.bound(ctx)
+	defer cancel()
+	if err := e.Page.TypeText(cctx, resolved); err != nil {
+		return err
+	}
+	payload := map[string]any{"kind": "type_text", "text": auditText(text, usedPlaceholder), "why": why}
+	if focusNote != "" {
+		payload["note"] = focusNote
+	}
+	e.audit(ctx, "action", payload)
+	return nil
+}
+
+// focusEditability inspects the deepest focused element (descending open shadow
+// roots) and returns "ok" (editable, not search/URL), "wrong_target" (search/URL
+// or non-editable), "unverified" (focus is inside a closed shadow root, so it
+// can't be read), or "none".
+func (e *Executor) focusEditability(ctx context.Context) string {
+	cctx, cancel := e.bound(ctx)
+	defer cancel()
+	v, err := e.Page.Eval(cctx, `() => {
+		let a = document.activeElement;
+		while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+		if (!a || a === document.body) return 'none';
+		const tag = (a.tagName || '').toLowerCase();
+		const type = (a.getAttribute ? (a.getAttribute('type') || '') : '').toLowerCase();
+		const nm = (a.getAttribute ? (a.getAttribute('name') || '') : '').toLowerCase();
+		const nonText = ['button','submit','checkbox','radio','range','file','image','reset','color'];
+		const editable = (tag === 'input' && nonText.indexOf(type) < 0) || tag === 'textarea' || a.isContentEditable;
+		const searchy = type === 'search' || type === 'url' || nm === 'q' || nm === 'search' || nm === 'url' || nm === 'query';
+		// Focus landed on a custom element with no readable shadow root → closed root.
+		const closedHost = a.shadowRoot === null && tag.indexOf('-') >= 0 && !editable;
+		if (closedHost) return 'unverified';
+		if (editable && !searchy) return 'ok';
+		return 'wrong_target';
+	}`)
+	if err != nil {
+		return "unverified" // can't read focus (cross-origin/odd state) → don't block
+	}
+	s := v.Str()
+	if s == "" {
+		return "unverified"
+	}
+	return s
+}
+
 // Select picks an option in a <select>.
 func (e *Executor) Select(ctx context.Context, n *perceive.Node, option, why string) error {
 	cctx, cancel := e.bound(ctx)

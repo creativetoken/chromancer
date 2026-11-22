@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -97,9 +98,18 @@ func (v *VNCView) Start(ctx context.Context) (base string, err error) {
 		return "", fmt.Errorf("camoufox: websockify not ready: %w", err)
 	}
 
-	// The token-guarded reverse proxy, bound to loopback.
+	// The token-guarded reverse proxy, bound to loopback by default. The bind
+	// address may be overridden (e.g. 0.0.0.0:8899) via AGENTBROWSER_HANDOFF_BIND
+	// so the view is reachable when agentbrowser runs inside a container; the
+	// proxy stays token-gated regardless of bind. The host advertised in the
+	// returned base URL can be set with AGENTBROWSER_HANDOFF_ADVERTISE (useful
+	// when binding 0.0.0.0, which is not directly openable).
 	upstream, _ := url.Parse("http://127.0.0.1:" + strconv.Itoa(wsPort))
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	bindAddr := "127.0.0.1:0"
+	if b := strings.TrimSpace(os.Getenv("AGENTBROWSER_HANDOFF_BIND")); b != "" {
+		bindAddr = b
+	}
+	ln, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		v.Close()
 		return "", err
@@ -108,6 +118,11 @@ func (v *VNCView) Start(ctx context.Context) (base string, err error) {
 	go func() { _ = v.srv.Serve(ln) }()
 
 	base = "http://" + ln.Addr().String()
+	if adv := strings.TrimSpace(os.Getenv("AGENTBROWSER_HANDOFF_ADVERTISE")); adv != "" {
+		if _, port, perr := net.SplitHostPort(ln.Addr().String()); perr == nil {
+			base = "http://" + net.JoinHostPort(adv, port)
+		}
+	}
 	v.logf("camoufox handoff view up at %s (display %s)", base, v.Display)
 	return base, nil
 }

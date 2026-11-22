@@ -390,3 +390,49 @@
   the text-naming path already resolves the lab repro at far lower cost. Revisit
   if real-site runs show naming is insufficient. · alt: build set-of-marks now
   (larger change, higher per-step cost, not required to pass the repro).
+
+- **2026-11-22 · Visual perception = screenshot + Go-drawn set-of-marks, as an
+  escalation (not a replacement)** · The text/DOM perceiver is blind to closed
+  shadow roots, cross-origin iframes and canvas-drawn controls (confirmed live on
+  bambulab: `fill_login_form` returned "no visible email or password fields", yet
+  the fields render for a human). Decision: add a visual mode where the agent gets
+  a viewport screenshot with numbered set-of-marks over perceived DOM nodes, and
+  can also click raw coordinates for regions with NO node. Marks are drawn in Go
+  on the captured PNG (not injected into the page) so they survive shadow/canvas
+  and don't perturb the DOM. Visual mode is an ESCALATION: the cheap text path runs
+  by default and we switch only when it can't find a login affordance, to keep
+  per-step cost down (screenshots + image tokens are expensive). · alts: (a)
+  always-visual driving — simpler loop but pays vision cost on every site and every
+  step; (b) inject DOM overlays for marks — perturbs the page and still can't mark
+  canvas/closed-shadow controls. · Credentials stay placeholder-substituted by the
+  Executor; click_at goes through the Executor deny-list + audit like any action.
+
+- **2026-11-22 · OTP/verification entry re-resolves the field by STABLE
+  attributes before typing, never by the stale handle** · The agent (or the
+  deterministic detector) perceives the code field, then `enter_verification`
+  fetches the code — a slow step (email delivery, slower on camoufox). If the
+  field re-renders during that wait (framework remount), its `data-ab-handle`
+  from the earlier perception is gone, so typing by the old handle selector hits
+  nothing and the code is never entered. Decision: in `doVerify`, re-perceive
+  right before typing and re-resolve the code field (and submit) with
+  `perceive.MatchNode` — a stable-attribute match (id, name, type, autocomplete,
+  inputmode, maxlength, role, name, rect), never the handle number. It only
+  replaces the field when the match is confident, so a non-match keeps today's
+  behaviour (no regression). Lab repro: `verify-rerender` swaps the code input
+  once, right after the perceiver tags it. · alt: trust the agent's handle
+  (breaks on any remount); re-run full DetectVerifyStep only (works when the page
+  still parses as a verify step, but loses the specific field identity).
+- **2026-11-22 · Non-perceivable (closed-shadow) code field is entered by
+  COORDINATE in visual mode; the code value never reaches the model** · When the
+  code field lives in a closed shadow root the perceiver can't see it, so there
+  is no handle to type into. Decision: `enter_verification` accepts an optional
+  `x,y` (the agent, in visual mode, locates the field in the screenshot and
+  supplies where); the callback focuses it with a real `click_at(x,y)` and types
+  the fetched code via `TypeText` into focus — the secret code is typed by Go,
+  never surfaced to the model (same guarantee as placeholder substitution).
+  Escalation: post-login, visual mode now also engages when the page clearly asks
+  for a one-time code but no textual input is perceivable (`asksForCodeNoField`),
+  excluding magic-link "check your email" copy so the passwordless path is
+  untouched. Lab repro: `verify-shadow`. · alt: require a DOM field (can't enter a
+  closed-shadow code at all); surface the code to the model so it types it
+  (breaks the no-secret-to-model guarantee).

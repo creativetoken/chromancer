@@ -101,8 +101,19 @@ every request gets a flat `401` and never reaches the VNC upstream.
   and each action takes longer than headless Chrome. One place this mattered: the
   agent-takeover verification step now gets its own budget (`agentVerifyBudget`,
   ≥45s) rather than inheriting the short escalation-trigger `VerifyTimeout`, so a
-  code has time to arrive and be entered on the slower engine. All lab e2e flows
-  that pass on chromium also pass on camoufox.
+  code has time to arrive and be entered on the slower engine.
+- **Coordinate click_at + custom event handlers / JS navigation.** A real mouse
+  `ClickAt(x,y)` fires the click handler of a form button (incl. one in a closed
+  shadow root — so the visual `shadow-login` login works on camoufox), but did
+  NOT fire the handler of a standalone over-canvas control, and camoufox ignores
+  JS-initiated top-level navigation (`location.href=`, `anchor.click()`,
+  `form.submit()`). Diagnosed exhaustively (an Eval-injected listener fires where
+  the page's own inline one does not). Impact: the `canvas-signin` visual lab is
+  **chromium-only** (`TestE2EAgentPrimaryVisualApps/canvas-signin` skips on
+  camoufox); visual perception itself is proven on camoufox by `shadow-login`
+  (full login through a closed shadow root). **Follow-up:** root-cause the
+  coordinate-click event dispatch in the playwright-go/camoufox path.
+- Every other lab e2e flow that passes on chromium also passes on camoufox.
 
 ## Validation (arm64 Linux, Docker)
 

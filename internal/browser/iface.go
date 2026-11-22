@@ -87,6 +87,12 @@ type Page interface {
 	Click(ctx context.Context, el Element) error
 	ClickAt(ctx context.Context, x, y int) error
 	TypeInto(ctx context.Context, el Element, text string) error
+	// TypeText types into whatever element currently has focus, with no Element
+	// handle. Visual/coordinate-driven mode uses it after ClickAt focuses a field
+	// that is not in the perceivable DOM (closed shadow root, canvas-drawn UI,
+	// cross-origin iframe). Implementations insert the text into the focused node
+	// and surface an input event the page can observe.
+	TypeText(ctx context.Context, text string) error
 	SelectOption(ctx context.Context, el Element, value string) error
 	PressEnter(ctx context.Context, el Element) error
 	Back(ctx context.Context) error

@@ -31,13 +31,14 @@ type Report struct {
 	StopReason     string         `json:"stop_reason"` // budget | plateau | frontier_empty | auth_lost | model_done | steps | loop
 	Pages          int            `json:"pages"`
 	// LLM/hybrid driver accounting.
-	Steps     int         `json:"steps,omitempty"`
-	InTokens  int         `json:"in_tokens,omitempty"`
-	OutTokens int         `json:"out_tokens,omitempty"`
-	CostUSD   float64     `json:"cost_usd,omitempty"`
-	Notes     []string    `json:"notes,omitempty"`
-	Flags     []string    `json:"flags,omitempty"` // foreign identity values etc.
-	Trace     []TraceStep `json:"-"`               // written to a file by the caller
+	Steps       int         `json:"steps,omitempty"`
+	Screenshots int         `json:"screenshots,omitempty"` // visual-mode screenshots taken
+	InTokens    int         `json:"in_tokens,omitempty"`
+	OutTokens   int         `json:"out_tokens,omitempty"`
+	CostUSD     float64     `json:"cost_usd,omitempty"`
+	Notes       []string    `json:"notes,omitempty"`
+	Flags       []string    `json:"flags,omitempty"` // foreign identity values etc.
+	Trace       []TraceStep `json:"-"`               // written to a file by the caller
 }
 
 // TraceStep is one LLM-driver step for the written step trace.
@@ -86,6 +87,13 @@ type Explorer struct {
 	Driver Driver
 	// Model is required for the llm and hybrid drivers.
 	Model LLMModel
+	// VisionModel drives visual-mode steps (viewport screenshot + set-of-marks).
+	// If nil, visual steps fall back to Model — which only works if Model is a
+	// vision-capable provider. Wire a vision-capable provider here (e.g. the plan
+	// model) so visual escalation can read closed-shadow/canvas pages.
+	VisionModel LLMModel
+	// MaxScreenshots caps visual-mode screenshots per run (default 10).
+	MaxScreenshots int
 	// Secrets are the account values the Executor substitutes for placeholders.
 	Secrets Secrets
 	// Prompt is the operator's free-text instruction (llm/hybrid).
@@ -109,8 +117,11 @@ type Explorer struct {
 	// EnterVerification fetches the current verification code/link from the
 	// configured channel (honouring since/claims/alias) and enters it. n is the
 	// model-chosen target field (may be nil; the callback re-detects the field).
-	// It returns a short outcome label, never the code.
-	EnterVerification func(ctx context.Context, n *perceive.Node, channel string, wantLink bool) (string, error)
+	// x,y are an optional viewport coordinate (CSS px) for VISUAL entry when the
+	// code field is not perceivable (closed shadow root) — 0,0 means none; the
+	// callback focuses that point and types the code into focus. It returns a short
+	// outcome label, never the code.
+	EnterVerification func(ctx context.Context, n *perceive.Node, channel string, wantLink bool, x, y int) (string, error)
 	// ResendVerification triggers a fresh code (clicks the resend control, bumps
 	// the since window). n is the model-chosen resend control (may be nil).
 	ResendVerification func(ctx context.Context, n *perceive.Node) error
@@ -137,6 +148,12 @@ type Explorer struct {
 
 	// hybrid is set by hybridCrawl so the shared BFS loop hands forms to the LLM.
 	hybrid bool
+
+	// --- visual-mode runtime state (llm driver) -----------------------------
+	visualActive     bool // currently escalated to screenshot-driven perception
+	screenshotsUsed  int  // screenshots taken this run (capped by MaxScreenshots)
+	noProgressStreak int  // consecutive steps that produced no visible change
+	loginAttempted   bool // the agent has filled/typed a login form at least once
 }
 
 // takeoverMode reports whether any agent-takeover tool is wired, enabling the

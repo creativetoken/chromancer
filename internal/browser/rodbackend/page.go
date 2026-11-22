@@ -295,6 +295,18 @@ func (p *rodPage) TypeInto(ctx context.Context, e browser.Element, text string) 
 	return nil
 }
 
+// TypeText types text into whatever element currently holds focus, with no DOM
+// handle. Visual/coordinate mode uses it after ClickAt focuses a field that is
+// not perceivable (closed shadow root, canvas, cross-origin iframe). InsertText
+// dispatches an input event so framework-controlled inputs update.
+func (p *rodPage) TypeText(ctx context.Context, text string) error {
+	rp := p.rp.Context(ctx)
+	if err := rp.InsertText(text); err != nil {
+		return fmt.Errorf("browser: type text: %w", err)
+	}
+	return nil
+}
+
 // SelectOption selects an <option> by visible text or value.
 func (p *rodPage) SelectOption(ctx context.Context, e browser.Element, value string) error {
 	el, err := asEl(e)

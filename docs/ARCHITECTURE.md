@@ -392,6 +392,38 @@ real-browser completion, a vision model for image/text, an out-of-process generi
 managed/invisible Turnstile) are **non-blocking**. Per-`(target,vendor,solver)` stats drive optional
 adaptive ordering; `agentbrowser eval --captcha` benchmarks the chain against mock vendor apps.
 
+### 6.7 Visual perception (set-of-marks escalation)
+
+The agent driver reads a page as structured text (the `A11yPerceiver` enumerates interactive
+nodes). Some pages can't be read that way — a login form inside a **closed shadow root**, a
+control painted on a **`<canvas>`**, or a **cross-origin iframe** — so the fields are on screen
+but absent from the node list (observed live on bambulab: `fill_login_form` → "no visible email
+or password fields"). For these the agent escalates to **visual mode**.
+
+- **Perception.** The explorer captures a viewport **screenshot** and draws **set-of-marks** —
+  numbered boxes over each perceived node — in Go on the PNG (never injected into the page, so it
+  survives shadow/canvas and doesn't perturb the DOM), scaling CSS-px rects by `devicePixelRatio`
+  and downscaling to cap image tokens. The image goes to a **vision-capable model**
+  (`Authenticator.VisionAgent`, wired from the router's vision task; `MaxScreenshots` caps cost).
+- **Actions.** `look()` (re-screenshot), `click(id)` (a marked node — executed by its **rect-centre
+  coordinate**, so open-shadow nodes with no flat-selector are still actionable), `click_at(x,y)`
+  (a region with no node — canvas/closed-shadow), and `type_text(text)` (into the focused element,
+  via `Page.TypeText`). Credentials stay `{{account.*}}` placeholders the Executor substitutes; a
+  password `type_text` first checks focus is an editable, non-search input (closed root → type but
+  flag unverified; wrong target → refuse). `click_at` is audited like any action.
+- **Escalation policy (`wantVisual`).** Text is the default. Escalate when a **canvas** is present
+  (any phase), or — only during the **form-finding phase** (before a login/identifier is
+  submitted) — when the page has **no interactive nodes**, has **no sign-in affordance**, or
+  progress has **stalled** two steps. Drop back to text as soon as a password field is
+  perceivable. Post-login interstitials, "check your email" pages and verification steps stay on
+  the text path (they have no sign-in affordance by design). The perceiver also walks **open**
+  shadow roots; closed roots remain visual-only.
+- **Testing.** Two lab apps reproduce the blind spots — `shadow-login` (form in a closed shadow
+  root → 0 nodes) and `canvas-signin` (sign-in painted on a canvas). A test-only visual policy
+  decodes the screenshot's solid marker colours and drives by coordinate — a deterministic,
+  offline stand-in for a vision model — so `TestE2EAgentPrimaryVisualApps` proves the whole
+  pipeline on both backends without an API call.
+
 ---
 
 ## 7. Session handback (the v1 product)

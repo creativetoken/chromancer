@@ -31,6 +31,13 @@ type VerifyStep struct {
 	Submit    *perceive.Node
 	LinkOnly  bool // page expects us to open a link, no code field
 	Resend    *perceive.Node
+
+	// Visual entry: the code field is not perceivable (closed shadow root), so the
+	// code is typed by coordinate — focus VisualX,VisualY (viewport CSS px) then
+	// type into focus. Set by the agent path when the model supplies coordinates.
+	Visual  bool
+	VisualX int
+	VisualY int
 }
 
 // DetectVerifyStep inspects a state for a verification challenge: a one-time

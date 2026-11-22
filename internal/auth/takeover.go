@@ -168,6 +168,7 @@ func (a *Authenticator) buildAgentExplorer(p browser.Page, rec *handback.Recorde
 		Audit:        a.Audit,
 		Driver:       explore.DriverLLM,
 		Model:        a.Agent,
+		VisionModel:  a.VisionAgent,
 		Secrets:      a.agentSecrets(),
 		Prompt:       operator,
 		SystemPrompt: systemPrompt,
@@ -187,8 +188,8 @@ func (a *Authenticator) buildAgentExplorer(p browser.Page, rec *handback.Recorde
 	}
 	// Only advertise a tool when its backing resource exists.
 	if a.Verifier != nil {
-		ex.EnterVerification = func(c context.Context, n *perceive.Node, channel string, wantLink bool) (string, error) {
-			return a.agentEnterVerification(c, p, deps, n, channel, wantLink, since)
+		ex.EnterVerification = func(c context.Context, n *perceive.Node, channel string, wantLink bool, x, y int) (string, error) {
+			return a.agentEnterVerification(c, p, deps, n, channel, wantLink, x, y, since)
 		}
 		ex.ResendVerification = func(c context.Context, n *perceive.Node) error {
 			return a.agentResend(c, p, deps, n, since)
@@ -336,7 +337,7 @@ func (a *Authenticator) primaryPrompt(mode Mode, hints Hints) string {
 // agentEnterVerification fetches the current code/link from the configured
 // channel and enters it, reusing doVerify (which honours since/claims/alias).
 // It returns only an outcome label — never the code.
-func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Page, deps FlowDeps, n *perceive.Node, channel string, wantLink bool, since *time.Time) (string, error) {
+func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Page, deps FlowDeps, n *perceive.Node, channel string, wantLink bool, x, y int, since *time.Time) (string, error) {
 	st := mustPerceive(ctx, a, p)
 	vs := DetectVerifyStep(st)
 	if !vs.Needed {
@@ -353,6 +354,15 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Pa
 	}
 	if wantLink {
 		vs.LinkOnly = true
+	}
+	// Visual entry: no perceivable code field, but the agent (in visual mode)
+	// supplied a coordinate for one it can SEE (a closed shadow root). Enter the
+	// code by focus + type-into-focus instead of by a (non-existent) handle.
+	if vs.CodeField == nil && !vs.LinkOnly && (x != 0 || y != 0) {
+		vs.Needed = true
+		vs.Visual = true
+		vs.VisualX = x
+		vs.VisualY = y
 	}
 	// The agent gets a full verification window, not the (possibly short)
 	// VerifyTimeout that only exists to trigger the deterministic→agent handoff:
@@ -495,7 +505,12 @@ func (a *Authenticator) recordAgentTrace(reason string, rep *explore.Report) {
 		return
 	}
 	a.trace.AgentTakeover = append(a.trace.AgentTakeover,
-		fmt.Sprintf("trigger=%s steps=%d stop=%s in_tokens=%d out_tokens=%d", reason, rep.Steps, rep.StopReason, rep.InTokens, rep.OutTokens))
+		fmt.Sprintf("trigger=%s steps=%d stop=%s screenshots=%d in_tokens=%d out_tokens=%d", reason, rep.Steps, rep.StopReason, rep.Screenshots, rep.InTokens, rep.OutTokens))
+	if rep.Screenshots > 0 {
+		a.trace.Screenshots += rep.Screenshots
+	}
+	a.trace.InTokens += rep.InTokens
+	a.trace.OutTokens += rep.OutTokens
 	for _, ts := range rep.Trace {
 		line := fmt.Sprintf("%d %s → %s", ts.N, ts.Action, ts.Outcome)
 		if ts.Why != "" {

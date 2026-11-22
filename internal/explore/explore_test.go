@@ -48,15 +48,18 @@ func TestBasePrefixAndResolve(t *testing.T) {
 }
 
 func TestSampleValueTypes(t *testing.T) {
-	cases := map[perceive.Node]string{
-		{Type: "email"}:                   "alex.taylor@example.com",
-		{Name: "Search"}:                  "widget",
-		{Name: "Full name", Type: "text"}: "Alex Taylor",
-		{Tag: "textarea", Name: "Bio"}:    "Updated by the automated crawler.",
+	cases := []struct {
+		n    perceive.Node
+		want string
+	}{
+		{perceive.Node{Type: "email"}, "alex.taylor@example.com"},
+		{perceive.Node{Name: "Search"}, "widget"},
+		{perceive.Node{Name: "Full name", Type: "text"}, "Alex Taylor"},
+		{perceive.Node{Tag: "textarea", Name: "Bio"}, "Updated by the automated crawler."},
 	}
-	for n, want := range cases {
-		if got := sampleValue(n); got != want {
-			t.Errorf("sampleValue(%+v)=%q want %q", n, got, want)
+	for _, c := range cases {
+		if got := sampleValue(c.n); got != c.want {
+			t.Errorf("sampleValue(%+v)=%q want %q", c.n, got, c.want)
 		}
 	}
 }

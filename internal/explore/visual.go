@@ -154,9 +154,10 @@ func (e *Explorer) decideVisual(ctx context.Context, obs string, st perceive.Sta
 		marked = shot
 	}
 	e.screenshotsUsed++
+	vw, vh := e.viewportCSS(ctx)
 	msgs := []model.Message{
 		{Role: model.System, Text: e.systemPrompt() + "\n\n" + visualSystemAddendum},
-		{Role: model.User, Text: obs + "\n\n" + visualPreamble(handles), Images: [][]byte{marked}},
+		{Role: model.User, Text: obs + "\n\n" + visualPreamble(handles, vw, vh), Images: [][]byte{marked}},
 	}
 	m := e.VisionModel
 	if m == nil {
@@ -190,13 +191,32 @@ func (e *Explorer) devicePixelRatio(ctx context.Context) float64 {
 	return 1
 }
 
+// viewportCSS reads the viewport size in CSS px so a caller can map image pixels
+// to click_at coordinates. Defaults to 0,0 (unknown) on failure.
+func (e *Explorer) viewportCSS(ctx context.Context) (int, int) {
+	w, err := e.Page.Eval(ctx, "() => window.innerWidth || 0")
+	if err != nil {
+		return 0, 0
+	}
+	h, err := e.Page.Eval(ctx, "() => window.innerHeight || 0")
+	if err != nil {
+		return 0, 0
+	}
+	return w.Int(), h.Int()
+}
+
 // visualPreamble lists which mark numbers are present so the model knows the set
-// it can click by number (regions with no number need click_at).
-func visualPreamble(handles []int) string {
+// it can click by number (regions with no number need click_at), and states the
+// viewport size so coordinates map correctly.
+func visualPreamble(handles []int, vw, vh int) string {
+	vp := ""
+	if vw > 0 && vh > 0 {
+		vp = fmt.Sprintf(" The viewport is %dx%d CSS px; click_at(x,y) coordinates are in that space (top-left origin).", vw, vh)
+	}
 	if len(handles) == 0 {
 		return "VISUAL MODE: the screenshot has NO numbered marks (no DOM nodes were " +
 			"perceivable). Use click_at(x,y) and type_text to operate the controls you " +
-			"see in the image; coordinates are viewport CSS pixels."
+			"see in the image; coordinates are viewport CSS pixels." + vp
 	}
 	var b strings.Builder
 	b.WriteString("VISUAL MODE: the screenshot is overlaid with numbered marks for the ")
@@ -215,6 +235,7 @@ func visualPreamble(handles []int) string {
 	b.WriteString("the image but that has NO number (drawn on a canvas, or inside a closed ")
 	b.WriteString("component), use click_at(x,y) in viewport CSS pixels, then type_text to ")
 	b.WriteString("type into it.")
+	b.WriteString(vp)
 	return b.String()
 }
 

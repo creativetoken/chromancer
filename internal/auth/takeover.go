@@ -168,6 +168,7 @@ func (a *Authenticator) buildAgentExplorer(p browser.Page, rec *handback.Recorde
 		Audit:        a.Audit,
 		Driver:       explore.DriverLLM,
 		Model:        a.Agent,
+		VisionModel:  a.VisionAgent,
 		Secrets:      a.agentSecrets(),
 		Prompt:       operator,
 		SystemPrompt: systemPrompt,

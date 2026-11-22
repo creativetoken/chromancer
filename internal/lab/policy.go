@@ -37,6 +37,14 @@ type PolicyModel struct {
 	checks        int
 	captchaSolves int
 	calls         int
+
+	// visual-mode phase state (set when the agent escalates and the message
+	// carries a screenshot). The policy decodes marker colours and drives by
+	// coordinate — a deterministic, offline stand-in for a vision model.
+	visEmailDone bool
+	visPwDone    bool
+	visSubmitted bool
+	visFocus     string
 }
 
 // NewPolicyModel returns the lab policy. It panics outside tests.
@@ -72,8 +80,23 @@ func (p *PolicyModel) Structured(ctx context.Context, msgs []model.Message, sche
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	// Visual mode: the message carries a screenshot. Decode marker colours and
+	// act by coordinate instead of reading the (empty) observation text.
+	if img := lastImage(msgs); img != nil {
+		raw := p.actVisual(img, lastUser(msgs), schema)
+		return raw, &model.Usage{InputTokens: 60, OutputTokens: 10}, nil
+	}
 	raw := p.act(lastUser(msgs), schema)
 	return raw, &model.Usage{InputTokens: 20, OutputTokens: 8}, nil
+}
+
+func lastImage(msgs []model.Message) []byte {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if len(msgs[i].Images) > 0 {
+			return msgs[i].Images[0]
+		}
+	}
+	return nil
 }
 
 func lastUser(msgs []model.Message) string {

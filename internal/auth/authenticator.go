@@ -51,7 +51,11 @@ type Authenticator struct {
 	// the agent (same live page, reusing the existing verifier/captcha/success/
 	// handoff tools) before falling back to a human.
 	Agent    explore.LLMModel
-	Recovery RecoveryMode
+	// VisionAgent, when set, drives visual-mode steps (screenshot + set-of-marks)
+	// for the agent driver. It must be a vision-capable provider. When nil, visual
+	// escalation is unavailable and the agent stays on the text path.
+	VisionAgent explore.LLMModel
+	Recovery    RecoveryMode
 	// AuthDriver selects deterministic (default) or agent-primary sign-in. In
 	// agent-primary mode the LLM agent drives the whole flow from the entry page
 	// and the deterministic entry-finder/handlers/resolve loop are not used.

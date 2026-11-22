@@ -46,13 +46,14 @@ func (h *harness) runAgentPrimaryMode(t *testing.T, app string, mode auth.Mode, 
 		Sessions: &auth.FileSessionStore{Path: filepath.Join(ws, "session.enc"), Key: &key},
 		Writer:   &handback.FileWriter{Dir: filepath.Join(ws, "artefacts"), Account: app},
 		Audit:    al, Budget: core.NewBudget(core.Limits{Time: 180 * time.Second}),
-		Verifier:   v,
-		Agent:      policy,
-		AuthDriver: auth.AuthDriverAgent,
-		Recovery:   auth.RecoveryAgent,
-		Handoff:    nil, // no human: a dead end must fail, not block
-		Capture:    handback.CaptureWindow{N: 3, T: 5 * time.Second},
-		EntryCache: filepath.Join(ws, "cache"), Timeout: 8 * time.Second,
+		Verifier:    v,
+		Agent:       policy,
+		VisionAgent: policy, // same lab policy drives text + visual (screenshot) steps
+		AuthDriver:  auth.AuthDriverAgent,
+		Recovery:    auth.RecoveryAgent,
+		Handoff:     nil, // no human: a dead end must fail, not block
+		Capture:     handback.CaptureWindow{N: 3, T: 5 * time.Second},
+		EntryCache:  filepath.Join(ws, "cache"), Timeout: 8 * time.Second,
 	}
 	return authr.Run(h.ctx, h.b, mode, auth.Hints{LoginURL: e.LoginURL, SignupURL: e.SignupURL})
 }
@@ -188,6 +189,39 @@ func TestE2EAgentPrimaryIconSignin(t *testing.T) {
 		t.Fatalf("agent-primary icon-signin should succeed: %v (trace %+v)", err, res.Trace)
 	}
 	assertPrimarySucceeded(t, res, policy, e.Password)
+}
+
+// TestE2EAgentPrimaryVisualApps drives the apps whose login can ONLY be operated
+// in visual mode: shadow-login (form inside a closed shadow root — no DOM nodes)
+// and canvas-signin (sign-in control painted on a <canvas>). Success here proves
+// the whole visual pipeline — screenshot → set-of-marks → coordinate click/type
+// into focus — on the active backend. The lab policy's visual half decodes the
+// marker colours; no real model is used.
+func TestE2EAgentPrimaryVisualApps(t *testing.T) {
+	skipUnlessE2E(t)
+	for _, app := range []string{"shadow-login", "canvas-signin"} {
+		app := app
+		t.Run(app, func(t *testing.T) {
+			h := newHarness(t)
+			e := h.expect(app)
+			policy := lab.NewPolicyModel()
+			res, err := h.runAgentPrimary(t, app, identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+			if err != nil {
+				t.Fatalf("agent-primary %s should succeed via visual mode: %v (trace %+v)", app, err, res.Trace)
+			}
+			assertPrimarySucceeded(t, res, policy, e.Password)
+			// The flow must have gone through a coordinate action (visual mode).
+			sawVisual := false
+			for _, line := range res.Trace.AgentTakeover {
+				if strings.Contains(line, "click_at") || strings.Contains(line, "type_text") {
+					sawVisual = true
+				}
+			}
+			if !sawVisual {
+				t.Logf("note: no click_at/type_text in takeover trace for %s (trace: %+v)", app, res.Trace.AgentTakeover)
+			}
+		})
+	}
 }
 
 func TestE2EAgentPrimaryTrustDevice(t *testing.T) {

@@ -38,6 +38,18 @@ type Node struct {
 	Visible      bool   `json:"visible"`
 	Text         string `json:"text,omitempty"` // for buttons/links: visible text
 	Pos          string `json:"pos,omitempty"`  // position hint for unlabeled controls, e.g. "top-right header"
+	Rect         []int  `json:"rect,omitempty"` // [x,y,w,h] in CSS px, viewport-relative; for set-of-marks + coordinate actions
+}
+
+// CenterOf returns the viewport-relative center (CSS px) of a node's bounding
+// box, and whether it has one. Visual/coordinate mode acts on a marked node by
+// clicking its center, so a node inside an open shadow root (not resolvable by a
+// flat querySelector) is still actionable.
+func (n Node) CenterOf() (x, y int, ok bool) {
+	if len(n.Rect) != 4 || n.Rect[2] <= 0 || n.Rect[3] <= 0 {
+		return 0, 0, false
+	}
+	return n.Rect[0] + n.Rect[2]/2, n.Rect[1] + n.Rect[3]/2, true
 }
 
 // State is the perceived page.
@@ -233,7 +245,17 @@ type frameOut struct {
 // with data-ab-handle starting at `base`, and returns JSON.
 const walkJS = `(base, frameIndex) => {
   const sel = 'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="switch"], [contenteditable="true"], summary, [onclick], canvas, [role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]';
-  const els = Array.from(document.querySelectorAll(sel));
+  // Collect matches from the document AND every OPEN shadow root, recursively.
+  // A closed shadow root cannot be read (null shadowRoot) — those controls are
+  // only reachable via visual/coordinate mode. Order is document-first, then
+  // shadow hosts depth-first, so handles stay stable across perceives.
+  const collect = (root, out) => {
+    out.push.apply(out, Array.from(root.querySelectorAll(sel)));
+    const hosts = root.querySelectorAll('*');
+    for (const host of hosts) { if (host.shadowRoot) collect(host.shadowRoot, out); }
+  };
+  const els = [];
+  collect(document, els);
   const seen = new Set();
   const txt = (el) => (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
   const labelFor = (el) => {
@@ -330,6 +352,7 @@ const walkJS = `(base, frameIndex) => {
       maxlength: (function(){ const m = parseInt(el.getAttribute('maxlength'), 10); return (m > 0 && m <= 64) ? m : 0; })(),
       disabled: !!el.disabled,
       visible: vis,
+      rect: (function(){ const r = el.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })(),
       text: (tag === 'a' || tag === 'button' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'alert' || el.getAttribute('role') === 'status' || el.hasAttribute('aria-live')) ? txt(el).slice(0, 200) : ''
     });
     h++;

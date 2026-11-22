@@ -104,9 +104,9 @@ func drawRectOutline(img *image.RGBA, x, y, w, h int) {
 // drawLabel paints the handle number at the box's top-left in a small font on a
 // solid tag, nudged to stay inside the image.
 func drawLabel(img *image.RGBA, x, y, handle int) {
-	const scale = 3        // px per font cell
-	const dw, dh = 3, 5    // font cell dims
-	const pad = 2          // tag padding
+	const scale = 3     // px per font cell
+	const dw, dh = 3, 5 // font cell dims
+	const pad = 2       // tag padding
 	s := []rune(itoa(handle))
 	glyphW := dw*scale + 1 // one-column gap between digits
 	tagW := pad*2 + len(s)*glyphW

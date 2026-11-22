@@ -436,3 +436,22 @@
   untouched. Lab repro: `verify-shadow`. · alt: require a DOM field (can't enter a
   closed-shadow code at all); surface the code to the model so it types it
   (breaks the no-secret-to-model guarantee).
+
+- **2026-11-22 · A failed login-form fill must NOT end the form-finding phase (it
+  was permanently suppressing visual escalation)** · Live bambulab run: the agent
+  speculatively called `fill_login_form` on the sign-in page, which returned "no
+  login form (password field) on this page" (the form is unreadable — closed
+  shadow / canvas / iframe). That failed fill set `loginAttempted=true`, and the
+  post-login guard in `wantVisual` then suppressed visual escalation for the rest
+  of the run (`screenshots=0`, `mode=text`): the agent spiralled clicking header
+  icons and timed out at a human handoff. Fix: `loginAttempted` is set only when a
+  login/credential action actually made progress (`marksLoginDone` — a real fill/
+  type, or a verification step), never on a fill that found no form. Additionally,
+  a fill that reports the form is unreadable now flags `fillFoundNoForm` so visual
+  mode escalates on the very next step instead of waiting out a stall streak. The
+  deterministic lab policy only fills when a password field is perceivable, so it
+  never exercised this ordering — covered by unit tests (`marksLoginDone`,
+  `fillFoundNoForm`, escalation). · alt: never mark form-finding done (later
+  interstitials would wrongly re-trigger visual — the regression this guard was
+  added to fix); escalate on any fill error (a type failure on a found field is
+  not a readability problem).

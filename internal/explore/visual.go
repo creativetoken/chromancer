@@ -40,7 +40,8 @@ func (e *Explorer) wantVisual(st perceive.State) bool {
 		return false
 	}
 	if hasPerceivableLoginForm(st) {
-		e.visualActive = false // a real form is readable: back to the cheap path
+		e.visualActive = false    // a real form is readable: back to the cheap path
+		e.fillFoundNoForm = false // the form is readable now
 		return false
 	}
 	if e.screenshotsUsed >= e.maxScreenshots() {
@@ -74,8 +75,9 @@ func (e *Explorer) wantVisual(st perceive.State) bool {
 		return false
 	}
 	// Pre-login: no interactive nodes at all (a form hidden in a closed shadow
-	// root), or a stall / no sign-in affordance while hunting for the form.
-	if len(st.Nodes) == 0 || e.noProgressStreak >= 2 || noSignInAffordance(st) {
+	// root), the fill tool just reported the form is unreadable, a stall, or no
+	// sign-in affordance while hunting for the form.
+	if len(st.Nodes) == 0 || e.fillFoundNoForm || e.noProgressStreak >= 2 || noSignInAffordance(st) {
 		e.visualActive = true
 		return true
 	}
@@ -171,6 +173,43 @@ func noSignInAffordance(st perceive.State) bool {
 		}
 	}
 	return true
+}
+
+// fillFoundNoForm reports whether a fill tool's outcome means the login/signup
+// form was not readable in the DOM (no form / no fields found) — a direct signal
+// to escalate to visual mode. It matches the agent fill callback's "no login
+// form (password field) on this page" and the crawl-path "no visible email or
+// password" phrasings, but not a fill that found the form and failed to type.
+func fillFoundNoForm(outcome string) bool {
+	o := strings.ToLower(outcome)
+	return strings.Contains(o, "no login form") ||
+		strings.Contains(o, "no signup form") ||
+		strings.Contains(o, "no visible email or password") ||
+		strings.Contains(o, "no password field") ||
+		strings.Contains(o, "no visible fields")
+}
+
+// marksLoginDone reports whether an action actually advanced PAST the
+// form-finding phase — so later interstitial/verification pages stay on the text
+// path (no visual escalation). A login/signup form that was really filled, a
+// credential actually typed, or a verification/resend step all qualify. Crucially,
+// a fill that found no form (fill_error / "no visible email or password") does
+// NOT: the form was never there, so visual escalation must remain available.
+func marksLoginDone(a llmAction, outcome string) bool {
+	switch a.Action {
+	case "enter_verification", "resend_verification":
+		return true
+	}
+	if !actAttemptsLogin(a) {
+		return false
+	}
+	// A credential fill/type counts once it did NOT error. Typing a credential is
+	// visually a no-op ("no visible change"), so progress can't be judged by a page
+	// change (that would miss a passwordless email-first step and wrongly leave the
+	// form-finding phase open on the "check your email" page); the absence of an
+	// error is what distinguishes a real fill/type from one that found no form.
+	lo := strings.ToLower(outcome)
+	return !strings.Contains(lo, "error") && !strings.Contains(lo, "not available") && !strings.Contains(lo, "unknown")
 }
 
 // actAttemptsLogin reports whether an action is part of entering credentials —

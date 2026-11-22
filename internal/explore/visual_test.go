@@ -75,6 +75,80 @@ func TestIsNoProgress(t *testing.T) {
 	}
 }
 
+func TestMarksLoginDone(t *testing.T) {
+	cases := []struct {
+		action, text, outcome string
+		want                  bool
+	}{
+		// A failed fill (no readable form) must NOT end form-finding — this is the
+		// bambulab regression: a speculative fill that found nothing used to suppress
+		// visual escalation for the rest of the run.
+		{"fill_login_form", "", "fill login form error: no visible email or password fields", false},
+		{"fill_login_form", "", "login form: filled email+password", true},
+		{"fill_signup_form", "", "fill signup form error: no visible fields", false},
+		{"fill_signup_form", "", "signup form: filled", true},
+		{"enter_verification", "", "verification: entered", true},
+		{"resend_verification", "", "a fresh code was requested", true},
+		// A credential type that errored is not progress; one that worked is — even
+		// though a successful type is visually "no visible change" (the magic-link
+		// regression: an email-first step must still end form-finding so the
+		// passwordless "check your email" page does not escalate to visual).
+		{"type", "{{account.password}}", "type error: no element", false},
+		{"type", "{{account.password}}", "typed", true},
+		{"type", "{{account.email}}", "no visible change", true},
+		{"type_text", "{{account.email}}", "no visible change", true},
+		// A non-login action never marks login done.
+		{"click", "", "navigated to /x", false},
+	}
+	for _, c := range cases {
+		got := marksLoginDone(llmAction{Action: c.action, Text: c.text}, c.outcome)
+		if got != c.want {
+			t.Errorf("marksLoginDone(%q,%q,%q)=%v want %v", c.action, c.text, c.outcome, got, c.want)
+		}
+	}
+}
+
+func TestWantVisualEscalatesAfterUnreadableFill(t *testing.T) {
+	// A page with interactive nodes but no readable form: without the fill signal
+	// it would not escalate pre-login, but once the fill tool reports "no visible
+	// email or password" it must.
+	e := &Explorer{VisionModel: stubModel{}, CheckLoggedIn: func(context.Context) (bool, []string) { return false, nil }, MaxScreenshots: 5}
+	// A sign-in page WITH affordance text and some nodes → no escalation yet.
+	page := perceive.State{Text: "Sign in to your account", Nodes: []perceive.Node{{Tag: "button", Name: "Continue", Visible: true}}}
+	if e.wantVisual(page) {
+		t.Fatal("should not escalate before the fill reports the form is unreadable")
+	}
+	// The fill tool reports no readable fields → escalate on the next check.
+	e.fillFoundNoForm = true
+	if !e.wantVisual(page) {
+		t.Fatal("should escalate to visual once the fill reported no readable form")
+	}
+}
+
+func TestFillFoundNoForm(t *testing.T) {
+	// The agent fill callback's real "no form" errors must be recognised; a typing
+	// failure on a found field must not.
+	yes := []string{
+		"fill login form error: no login form (password field) on this page",
+		"fill signup form error: no signup form on this page",
+		"fill login form error: no visible email or password fields",
+	}
+	for _, o := range yes {
+		if !fillFoundNoForm(o) {
+			t.Errorf("fillFoundNoForm(%q) = false, want true", o)
+		}
+	}
+	no := []string{
+		"fill login form error: password field: type into [handle 4]: context deadline exceeded",
+		"login form: filled username and password; submit when ready",
+	}
+	for _, o := range no {
+		if fillFoundNoForm(o) {
+			t.Errorf("fillFoundNoForm(%q) = true, want false", o)
+		}
+	}
+}
+
 func TestWantVisualEscalationAndDropback(t *testing.T) {
 	// visionAvailable requires takeover mode + a VisionModel.
 	e := &Explorer{

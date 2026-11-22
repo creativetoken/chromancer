@@ -190,13 +190,18 @@ func (e *Explorer) decideVisual(ctx context.Context, obs string, st perceive.Sta
 		e.crawlDebug("visual: screenshot failed: %v", err)
 		return e.decide(ctx, obs)
 	}
-	marked, handles, err := drawSetOfMarks(shot, st.Nodes, e.devicePixelRatio(ctx), 1200)
+	dpr := e.devicePixelRatio(ctx)
+	marked, handles, err := drawSetOfMarks(shot, st.Nodes, dpr, 1200)
 	if err != nil {
 		e.crawlDebug("visual: set-of-marks failed: %v", err)
 		marked = shot
 	}
 	e.screenshotsUsed++
-	vw, vh := e.viewportCSS(ctx)
+	// Derive the CSS viewport from the screenshot's own device dimensions ÷ DPR,
+	// rather than a window.innerWidth Eval (which returns 0 on some backends).
+	// The screenshot is viewport-only, so this is exact; DPR defaults to 1, which
+	// is correct on a virtual display even if its Eval also fails.
+	vw, vh := screenshotCSSDims(shot, dpr)
 	msgs := []model.Message{
 		{Role: model.System, Text: e.systemPrompt() + "\n\n" + visualSystemAddendum},
 		{Role: model.User, Text: obs + "\n\n" + visualPreamble(handles, vw, vh), Images: [][]byte{marked}},
@@ -233,18 +238,15 @@ func (e *Explorer) devicePixelRatio(ctx context.Context) float64 {
 	return 1
 }
 
-// viewportCSS reads the viewport size in CSS px so a caller can map image pixels
-// to click_at coordinates. Defaults to 0,0 (unknown) on failure.
-func (e *Explorer) viewportCSS(ctx context.Context) (int, int) {
-	w, err := e.Page.Eval(ctx, "() => window.innerWidth || 0")
-	if err != nil {
-		return 0, 0
+// screenshotCSSDims derives the CSS viewport size from the (viewport-only)
+// screenshot's device dimensions ÷ DPR. This is exact and avoids a
+// window.innerWidth Eval that some backends return 0 for; DPR defaults to 1.
+func screenshotCSSDims(shot []byte, dpr float64) (int, int) {
+	w, h := pngDims(shot)
+	if dpr <= 0 {
+		dpr = 1
 	}
-	h, err := e.Page.Eval(ctx, "() => window.innerHeight || 0")
-	if err != nil {
-		return 0, 0
-	}
-	return w.Int(), h.Int()
+	return int(float64(w) / dpr), int(float64(h) / dpr)
 }
 
 // visualPreamble lists which mark numbers are present so the model knows the set

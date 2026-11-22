@@ -3,8 +3,11 @@ package lab
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -34,6 +37,7 @@ func (p *PolicyModel) actVisual(img []byte, obs string, schema json.RawMessage) 
 	ex, ey, hasEmail := findColorCenter(m, markerEmail, vw, vh)
 	px, py, hasPw := findColorCenter(m, markerPass, vw, vh)
 	sx, sy, hasSubmit := findColorCenter(m, markerSubmit, vw, vh)
+	visualDebug(img, m, vw, vh, ex, ey, hasEmail, px, py, hasPw, sx, sy, hasSubmit)
 
 	if hasEmail && !p.visEmailDone {
 		if p.visFocus != "email" {
@@ -72,6 +76,27 @@ func (p *PolicyModel) actVisual(img []byte, obs string, schema json.RawMessage) 
 }
 
 func mustJSON(a act) json.RawMessage { b, _ := json.Marshal(a); return b }
+
+var visualDebugN int
+
+// visualDebug, when AGENTBROWSER_VISUAL_DEBUG=1, writes the received screenshot
+// and the detected marker coordinates to AGENTBROWSER_VISUAL_DEBUG_DIR (or the
+// working dir), so a backend's screenshot can be inspected offline.
+func visualDebug(img []byte, m image.Image, vw, vh, ex, ey int, he bool, px, py int, hp bool, sx, sy int, hs bool) {
+	if os.Getenv("AGENTBROWSER_VISUAL_DEBUG") != "1" {
+		return
+	}
+	dir := os.Getenv("AGENTBROWSER_VISUAL_DEBUG_DIR")
+	if dir == "" {
+		dir = "visual-debug"
+	}
+	_ = os.MkdirAll(dir, 0o755)
+	visualDebugN++
+	_ = os.WriteFile(filepath.Join(dir, "shot-"+strconv.Itoa(visualDebugN)+".png"), img, 0o644)
+	b := m.Bounds()
+	fmt.Fprintf(os.Stderr, "[visual-debug] shot#%d img=%dx%d viewport=%dx%d email=(%d,%d,%v) pw=(%d,%d,%v) submit=(%d,%d,%v)\n",
+		visualDebugN, b.Dx(), b.Dy(), vw, vh, ex, ey, he, px, py, hp, sx, sy, hs)
+}
 
 var viewportRe = regexp.MustCompile(`viewport is (\d+)x(\d+) CSS px`)
 

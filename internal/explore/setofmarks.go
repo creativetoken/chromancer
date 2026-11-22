@@ -37,6 +37,15 @@ var digits3x5 = map[rune][5]string{
 	'9': {"111", "101", "111", "001", "111"},
 }
 
+// pngDims returns a PNG's pixel dimensions from its header, or 0,0 on error.
+func pngDims(b []byte) (int, int) {
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
 // drawSetOfMarks overlays a numbered box for every visible node that has a rect
 // onto the screenshot PNG. dpr scales CSS-px rects to the screenshot's device
 // pixels. maxW downscales the result (nearest-neighbour) to cap image tokens; 0

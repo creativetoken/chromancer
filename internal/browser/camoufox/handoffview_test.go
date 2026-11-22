@@ -70,6 +70,66 @@ func TestViewProxyRefusesWithoutToken(t *testing.T) {
 	}
 }
 
+// TestViewProxySetsCookieForSubResources verifies that an authenticated request
+// sets the handoff cookie, and that a follow-up request carrying ONLY that cookie
+// (as noVNC's relative-URL CSS/JS/image fetches do — no ?token=) is let through.
+// Without this, sub-resources 401 and the page renders broken.
+func TestViewProxySetsCookieForSubResources(t *testing.T) {
+	var reached bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	uURL, _ := url.Parse(upstream.URL)
+	good := "secret-token-123"
+	front := httptest.NewServer(NewViewProxy(uURL, func(tok string) bool { return tok == good }))
+	defer front.Close()
+
+	// First request with the query token: must succeed AND set the cookie.
+	resp, err := http.Get(front.URL + "/vnc.html?token=" + good)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("vnc.html status = %d, want 200", resp.StatusCode)
+	}
+	var cookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == handoffCookie {
+			cookie = c
+		}
+	}
+	if cookie == nil || cookie.Value != good {
+		t.Fatalf("expected %s cookie carrying the token, got %+v", handoffCookie, resp.Cookies())
+	}
+
+	// A sub-resource request with NO query token but WITH the cookie must pass.
+	reached = false
+	req, _ := http.NewRequest(http.MethodGet, front.URL+"/app/styles/base.css", nil)
+	req.AddCookie(cookie)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("sub-resource request: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK || !reached {
+		t.Errorf("sub-resource via cookie: status = %d reached = %v, want 200/true", resp2.StatusCode, reached)
+	}
+
+	// The same sub-resource with neither token nor cookie is still refused.
+	reached = false
+	resp3, err := http.Get(front.URL + "/app/styles/base.css")
+	if err != nil {
+		t.Fatalf("no-auth request: %v", err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusUnauthorized || reached {
+		t.Errorf("sub-resource without auth: status = %d reached = %v, want 401/false", resp3.StatusCode, reached)
+	}
+}
+
 func TestViewProxyNilValidatorRefuses(t *testing.T) {
 	uURL, _ := url.Parse("http://127.0.0.1:1")
 	vp := NewViewProxy(uURL, nil)

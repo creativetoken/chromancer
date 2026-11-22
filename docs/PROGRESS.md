@@ -9,18 +9,19 @@ guarded one-time-code typing) and the icon-only sign-in perceiver work, each wit
 lab repros + tests. Full unit suite, vet/lint, and agent-primary lab e2e pass;
 `icon-signin` passes on chromium **and** camoufox.
 
-**Not merged — two reasons.** (1) The merge gate requires a live bambulab agent
-login to pass, which it did not: the OTP step times out entering the code into
-bambulab's live field (element/type stage), and live validation was stopped by a
-verification rate limit (4/5 attempts). (2) No `gh`/token in this environment, so
-PRs could not be auto-opened. Both PR bodies are ready (scratchpad/PR_BODY.md for
-step 3) with compare URLs; open + review them manually.
+**Merge status (2026-11-22).** `feat/agent-only` is **MERGED to main** (operator
+approved; build/vet/unit green at merge, merge commit `fcdaccd`). The live
+bambulab gate was waived by the operator — note the live caveat stands: the OTP
+step still times out entering the code into bambulab's live field (element/type
+stage); live validation was stopped by a verification rate limit (4/5 attempts).
 
 **Open branches / PRs:**
-- `feat/agent-only` → main (step 3): default flip + 3 bug fixes + docs. HELD.
-  Compare: https://github.com/creativetoken/chromancer/compare/main...feat/agent-only?expand=1
+- `feat/agent-only` → main (step 3): default flip + 3 bug fixes + docs. **MERGED
+  (`fcdaccd`).**
 - `feat/icon-signin` → main (step 4): perceiver naming + icon-signin lab (both
-  backends) + prompt rule, on top of feat/agent-only. HELD (same gate).
+  backends) + prompt rule. Rebased onto current main (merge `b404cfa`), pushed,
+  build/vet/unit green. **Open — ready to merge.**
+  Compare: https://github.com/creativetoken/chromancer/compare/main...feat/icon-signin?expand=1
 
 **Open follow-ups (not done, recorded):**
 1. Live OTP entry into bambulab's code field times out at the element/type stage

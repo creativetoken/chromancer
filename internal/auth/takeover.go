@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -369,12 +371,43 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Pa
 	// once the agent is driving the verification, the code must have time to
 	// arrive and be entered (slower engines like Camoufox need the headroom).
 	if err := a.doVerify(ctx, p, deps, vs, since, a.agentVerifyBudget()); err != nil {
+		a.saveOTPDebug(ctx, p, "verify_failed: "+err.Error())
 		return "", err
 	}
 	if vs.LinkOnly {
 		return "verification link opened", nil
 	}
 	return "verification code entered", nil
+}
+
+// saveOTPDebug writes a diagnostic screenshot and a summary of the page's input
+// fields to the account workspace when OTP entry fails, so the actual OTP widget
+// (one input vs. multiple digit boxes, a custom component, an error message) can
+// be inspected offline. Best-effort: it never affects the flow.
+func (a *Authenticator) saveOTPDebug(ctx context.Context, p browser.Page, note string) {
+	st := mustPerceive(ctx, a, p)
+	var fields []string
+	for i := range st.Nodes {
+		n := &st.Nodes[i]
+		if n.Tag == "input" && n.Visible {
+			fields = append(fields, fmt.Sprintf("{type=%q mode=%q max=%d id=%q name=%q ac=%q val=%q}",
+				n.Type, n.InputMode, n.MaxLength, n.ID, n.NameAttr, n.Autocomplete, n.Value))
+		}
+	}
+	shotPath := ""
+	ws := os.Getenv("AGENTBROWSER_WORKSPACE")
+	if ws != "" {
+		if shot, err := p.Screenshot(ctx); err == nil {
+			dir := filepath.Join(ws, "accounts", a.Account)
+			_ = os.MkdirAll(dir, 0o700)
+			fn := filepath.Join(dir, fmt.Sprintf("otp-debug-%d.png", time.Now().Unix()))
+			if os.WriteFile(fn, shot, 0o600) == nil {
+				shotPath = fn
+			}
+		}
+	}
+	a.trace.Add("otp-debug (%s): url=%s inputs=%s screenshot=%s", note, st.URL, strings.Join(fields, " "), shotPath)
+	a.log("otp_debug", map[string]any{"note": note, "url": st.URL, "inputs": fields, "screenshot": shotPath})
 }
 
 // agentVerifyBudget is the verification window the agent gets for entering a

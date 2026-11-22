@@ -253,14 +253,44 @@ func (p *rodPage) TypeInto(ctx context.Context, e browser.Element, text string) 
 	}
 	el = el.Context(ctx)
 	_ = el.ScrollIntoView()
-	if err := el.Focus(); err != nil {
-		return fmt.Errorf("browser: focus: %w", err)
+	// Normal path: programmatic focus (rod waits for interactability), clear, and
+	// type real key events. This is what most inputs want.
+	const attempt = 3 * time.Second
+	fctx, cancelF := context.WithTimeout(ctx, attempt)
+	if err := el.Context(fctx).Focus(); err == nil {
+		_ = el.SelectAllText()
+		_ = el.Type(input.Backspace)
+		ictx, cancelI := context.WithTimeout(ctx, attempt)
+		_ = el.Context(ictx).Input(text)
+		cancelI()
 	}
-	// Select-all + delete to clear existing content, then type.
-	_ = el.SelectAllText()
-	_ = el.Type(input.Backspace)
-	if err := el.Input(text); err != nil {
-		return fmt.Errorf("browser: input: %w", err)
+	cancelF()
+	// Verify the value actually landed. Real key events silently fail to register
+	// on guarded inputs (focus timed out, the field is readonly until clicked, or
+	// a one-time-code field sits under a transient overlay). When the value did
+	// not take, un-guard with a real click, then set it directly and fire the
+	// input/change events a framework listens for. Everything is bounded so a
+	// stuck field cannot hang the whole verification step.
+	vctx, cancelV := context.WithTimeout(ctx, attempt)
+	got, _ := el.Context(vctx).Eval(`() => this.value`)
+	cancelV()
+	if got != nil && got.Value.Str() == text {
+		return nil
+	}
+	cctx, cancelC := context.WithTimeout(ctx, attempt)
+	_ = el.Context(cctx).Click(proto.InputMouseButtonLeft, 1) // best effort
+	cancelC()
+	jctx, cancelJ := context.WithTimeout(ctx, attempt)
+	defer cancelJ()
+	_, jerr := el.Context(jctx).Eval(`(v) => {
+		this.focus();
+		this.value = "";
+		this.value = v;
+		this.dispatchEvent(new Event("input", { bubbles: true }));
+		this.dispatchEvent(new Event("change", { bubbles: true }));
+	}`, text)
+	if jerr != nil {
+		return fmt.Errorf("browser: input: %w", jerr)
 	}
 	return nil
 }

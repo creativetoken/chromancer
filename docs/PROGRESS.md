@@ -1,8 +1,89 @@
-Status: complete — camoufox validated live on arm64 Linux (Docker). Full lab e2e passes on BOTH
-backends (chromium `ok` 932s; camoufox `ok` 994s, zero failures). Items 1-6 done: backend logs in on
-Firefox; fingerprint stable per account; token-guarded noVNC handoff view; popups on both backends;
-sidecar restart/idle lifecycle; B0 bot-detection recorded. See the "Camoufox LIVE validation" section
-below and docs/CAMOUFOX.md.
+Status: in progress — agent default
+
+## Live validation + agent-default push (2026-11-21)
+Working through the agent-default plan (see DECISIONS.md for choices):
+- [x] Step 1: cold bambulab agent run ends in failed/human, not a false `done`
+  (success-detector fix, commit 537e27b). Session restored.
+- [~] Step 2: warm agent runs on https://bambulab.com/en-gb/sign-in. The agent
+  dismisses consent, fills email+password, submits, and reaches the email-OTP
+  step every time. Fixed three bugs found here (all with lab repros + tests):
+  success-detector false positive; verification claim lockout (unclaim on failed
+  entry); guarded one-time-code typing (TypeInto click + value-set fallback,
+  TestE2ECombinedVerifyGuarded). **NOT confirmed live**: entry into bambulab's
+  real code field times out at the element/type stage (attempt #3); stage
+  diagnostics + 20s entry budget added but attempt #4 was **rate-limited** (no
+  OTP email delivered after 4 logins in ~50 min). Stopped at 4/5 live attempts
+  per the live-site rate-limit rule. Session restored. See docs/eval/agent-only.md.
+- [~] Step 3: CLI default flipped to --auth-driver agent (deterministic selectable
+  + deprecated, README updated). **Merge is HELD**: the gate requires step 2 to
+  pass live, which it did not (rate-limited + OTP-entry gap). Gate otherwise green:
+  build/vet/lint + unit suite pass; agent-primary lab e2e chromium 11/11 (camoufox
+  not re-run this session). **PR could not be auto-opened** — no `gh`/token in this
+  env (SSH remote); branch pushed. PR title/body ready at scratchpad/PR_BODY.md;
+  open via: https://github.com/creativetoken/chromancer/compare/main...feat/agent-only?expand=1
+  Proceeding to step 4 on branch feat/icon-signin.
+- [ ] Step 4: icon-only sign-in controls (feat/icon-signin) — new branch off
+  feat/agent-only. Includes the live OTP-entry element/type-stage diagnosis as a
+  follow-up (the field resists rod element ops; needs perceiver/executor work).
+- [ ] Step 5: finalize docs + PROGRESS "Status: complete".
+
+# Agent-only refactor (remove deterministic drivers; an LLM agent decides every step)
+> Branch `feat/agent-only` off `pre-agent-only` tag. Baseline eval: docs/eval/pre-agent-only.md.
+> The agent-takeover infra (internal/explore Explorer + the auth tool callbacks in auth/takeover.go)
+> already exists — the refactor PROMOTES it from recovery to the PRIMARY (only) driver.
+
+- [x] 0. Baseline: tag `pre-agent-only`, run `agentbrowser eval` (auth + crawl) → docs/eval/pre-agent-only.md
+- [~] 1. Remove deterministic drivers + expose helpers as tools:
+      - [x] tool plumbing in `internal/explore` (FillLoginForm/FillSignupForm/DismissBanner callbacks,
+            schema gating, applyAction dispatch, test) — commit 9591802
+      - [x] auth-side callbacks wired into runAgent (agentFillLoginForm/FillSignupForm/DismissBanner) — 3f0efbd
+      - [x] test-only lab-policy model (`internal/lab/policy.go`, `testing.Testing()`-guarded): reads the
+            OBSERVATION, returns one action/step; drives the whole lab auth surface + basic crawl. Unit-tested.
+      - [x] agent-primary auth runner (`Authenticator.AuthDriver = AuthDriverAgent` → `runAgentPrimary`):
+            Explorer is the SOLE driver from the entry page (no entry-finder/handlers/resolve loop). Shared
+            `buildAgentExplorer`; `prompts/auth_system.md`; success only via check_logged_in; bot-wall → human;
+            wrong creds → credentials_rejected (no retries). e2e (lab policy, chromium): simple, trust-device,
+            terms-modal, injection-blocked, resend-OTP, wrong-password, bot-wall all green. Deterministic path
+            untouched (AuthDriver defaults to deterministic; existing takeover e2e still green).
+      - [x] agent-primary breadth (chromium): simple/multistep/modal/iframe/spa-jwt/hidden-entry/bound-session/
+            form-errors/hydration-login + trust/terms/injection/resend-OTP/wrong-password/bot-wall — all green.
+            Lab-policy improvements (submit-control pick, modal/members opener, creds-reject fast-fail) + three
+            underlying correctness fixes (perceive alert nodes; Classify precise alert text; explore re-submit
+            detection) landed. CLI `--auth-driver agent` + App.AuthDriver wired (fail-fast without a model).
+      - [x] agent-primary e2e expanded to verification + CAPTCHA + signup apps (otp-sms/magic-link/totp/
+            combined-verify/signup-verify/captcha-mock) and the WHOLE agent-primary suite now passes on BOTH
+            backends — chromium and camoufox (via Docker/Xvfb). Fixed a real resend bug (verification freshness
+            window must be captured before the resend click; shared by both drivers). Both-backends gate = MET.
+      - [ ] DELETE FlowHandler/DefaultHandlers/MultiStepHandler/SignupHandler orchestration, the rules-based
+            entry finder + path probing, and the resolve loop. **Staged, not done:** the gate is met, but the
+            physical deletion also requires converting/removing the large deterministic test suite (login/signup/
+            entry/hydration/combined-verify/mcp/captcha/crawl-bfs-hybrid e2e + auth/entry/explore unit tests) and
+            re-validating BOTH backends — a focused follow-up kept separate to preserve "tests green at each step".
+            The agent-only path is the behavioural default-capable driver today via `--auth-driver agent`.
+      - [x] crawl: `--driver` marked deprecated (one release) with a warning; bfs/hybrid still function until
+            the deletion step drops them for the single llm loop
+      - [x] independent bugs: verify link extraction (entities/utm/anchor) + exact toAlias + charset;
+            chromium version logged + stale warning
+      - [ ] recipe replay → hint in the agent's first observation ("last successful path: …") — not yet built
+- [x] 2. One agent loop for auth + crawl (prompts/auth_system.md + crawl_system.md; --prompt). Escalation
+      agent → human → failed{reason}; bot-wall → human; wrong creds → fail. Budgets/loop-detection/no-URL-guess.
+- [~] 3. Real LLM provider required: agent-primary fails fast with a clear message when no model is configured
+      (`App.RunAuth`); OpenAI-compat + Ollama providers exist; cheap-vs-plan routing via the ModelRouter/ByTask.
+- [x] 4. Tests: test-only "lab policy" model (reads observation, returns actions; panics outside `go test`);
+      the whole agent-primary lab surface passes agent-only on BOTH backends; every scenario asserts no
+      password/code/seed reaches the model. (`live` eval with a real key: still optional/pending.)
+- [~] 5. Docs: ADR 0017 supersedes 0004; ARCHITECTURE, README, CAPTCHA.md, VERIFICATION.md updated;
+      docs/eval/agent-only.md written (lab-policy both-backends results vs baseline). Eval with a REAL provider
+      (tokens/cost) is pending an API key + eval-harness wiring to AuthDriverAgent.
+
+## Remaining to call this "complete"
+1. Physical deletion of the deterministic orchestration (step 1 last box) + conversion/removal of its test
+   suite, re-validated on both backends. The agent-only driver already passes both backends; this is cleanup.
+2. Flip the default AuthDriver to agent (after 1), or keep deterministic one release as a deprecated fallback.
+3. Recipe-replay hint; paid eval with a real provider; MCP get_job "current step" surfacing.
+> Status line stays "in progress — agent-only" until the deletion lands and the default flips.
+
+## Camoufox backend (prior task, complete) — see docs/CAMOUFOX.md, tag `camoufox-v1`
 
 # PROGRESS
 

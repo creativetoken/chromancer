@@ -11,7 +11,7 @@ code can keep using the session. The command is called `agentbrowser`.
 - Solves common CAPTCHAs automatically and falls back to a human only when it has to.
 - Hands back a session bundle: cookies, storage, auth headers and token expiry you can replay without a browser.
 - Saves the whole login as a HAR file so you can see what happened.
-- Crawls the app once it is logged in — deterministically, or driven by an LLM you can steer with a prompt.
+- Crawls the app once it is logged in — driven by an LLM you can steer with a prompt.
 - Runs as a CLI, or as an MCP server for an agent to drive.
 
 ## Requirements
@@ -51,8 +51,21 @@ agentbrowser creds put --target URL --account NAME --username U --password P
 Log in. Use `--mode signup` to register, and `--headful` to watch the browser:
 
 ```sh
-agentbrowser auth --account NAME --login-url URL
+agentbrowser auth --account NAME --login-url URL                          # agent driver (default)
+agentbrowser auth --account NAME --login-url URL --auth-driver deterministic  # deprecated code-first flow
 ```
+
+**The agent driver is the default.** The LLM agent is the sole driver of the
+sign-in: it finds and fills the form, clears interstitials, enters verification
+codes, solves CAPTCHAs, and confirms success itself. It needs a configured model
+and fails fast without one. The account's real secrets never enter the model —
+the agent fills them through tools — and the account-safety deny-list is always
+enforced.
+
+`--auth-driver deterministic` selects the older code-first flow (entry finder +
+flow handlers + resolve loop, with the agent as recovery). **It is deprecated**
+and will be removed in a future release; selecting it prints a warning. Prefer
+the agent driver.
 
 Print the saved session, or the full bundle with `--bundle`:
 
@@ -63,14 +76,13 @@ agentbrowser export-session --account NAME
 Crawl the app once logged in, or run the MCP server for an agent to drive:
 
 ```sh
-agentbrowser crawl --account NAME                       # deterministic BFS crawl (default)
-agentbrowser crawl --account NAME --driver llm --prompt "Explore billing and the API keys page"
+agentbrowser crawl --account NAME --prompt "Explore billing and the API keys page"
 agentbrowser mcp
 ```
 
-`--driver` selects `bfs` (default), `llm` (an LLM chooses each action) or `hybrid`
-(BFS breadth + LLM for forms). `--prompt` (or `--prompt-file`) gives the LLM a
-focus and implies `--driver llm`. The account-safety deny-list is enforced in
+The crawl is LLM-driven: an LLM chooses each action. `--prompt` (or
+`--prompt-file`) gives it a focus. `--driver` is **deprecated** (one release) and
+ignored. The account-safety deny-list is enforced in
 code regardless of any prompt, and the account's real secrets never enter the
 model — it types `{{account.password}}`-style placeholders the tool substitutes.
 

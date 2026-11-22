@@ -20,6 +20,9 @@ import (
 //go:embed prompts/takeover_system.md
 var takeoverSystemPrompt string
 
+//go:embed prompts/auth_system.md
+var authSystemPrompt string
+
 // RecoveryMode selects what happens when the deterministic flow hits a dead end.
 type RecoveryMode int
 
@@ -31,6 +34,28 @@ const (
 	RecoveryHuman                     // human → fail (no agent)
 	RecoveryOff                       // fail immediately (no agent, no human)
 )
+
+// AuthDriver selects how the sign-in is driven.
+type AuthDriver int
+
+// Auth drivers. The zero value is the deterministic driver (entry-finder + flow
+// handlers + resolve loop, with the agent as recovery). AuthDriverAgent makes
+// the LLM agent the sole driver from the entry page.
+const (
+	AuthDriverDeterministic AuthDriver = iota
+	AuthDriverAgent
+)
+
+// ParseAuthDriver maps a CLI/config value to an AuthDriver.
+func ParseAuthDriver(s string) (AuthDriver, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "deterministic", "det":
+		return AuthDriverDeterministic, true
+	case "agent", "llm":
+		return AuthDriverAgent, true
+	}
+	return AuthDriverDeterministic, false
+}
 
 // ParseRecoveryMode maps a CLI flag value to a RecoveryMode.
 func ParseRecoveryMode(s string) (RecoveryMode, bool) {
@@ -99,46 +124,15 @@ func (a *Authenticator) runAgent(ctx context.Context, p browser.Page, rec *handb
 	defer cancel()
 
 	step := 0
-	ex := &explore.Explorer{
-		Page:         p,
-		Perceiver:    a.Perceiver,
-		Budget:       bud,
-		Audit:        a.Audit,
-		Driver:       explore.DriverLLM,
-		Model:        a.Agent,
-		Secrets:      a.agentSecrets(),
-		Prompt:       a.takeoverPrompt(mode, reason),
-		SystemPrompt: takeoverSystemPrompt,
-		MaxSteps:     25,
-		CheckLoggedIn: func(c context.Context) (bool, []string) {
-			step++
-			a.reportRecovering(step, reason)
-			return a.agentCheckLoggedIn(c, p, rec)
-		},
-		RequestHuman: func(c context.Context, r string) error {
-			// The agent gives up and asks for a human; recover() performs the
-			// actual handoff afterwards, so this just records the intent.
-			a.trace.Add("agent takeover: requested human (%s)", r)
-			return nil
-		},
-	}
-	// Only advertise a tool when its backing resource exists.
-	if a.Verifier != nil {
-		ex.EnterVerification = func(c context.Context, n *perceive.Node, channel string, wantLink bool) (string, error) {
-			return a.agentEnterVerification(c, p, deps, n, channel, wantLink, since)
-		}
-		ex.ResendVerification = func(c context.Context, n *perceive.Node) error {
-			return a.agentResend(c, p, deps, n, since)
-		}
-	}
-	if a.Captcha != nil {
-		ex.SolveCaptcha = func(c context.Context) (string, error) {
-			return a.agentSolveCaptcha(c, p)
-		}
-	}
+	ex := a.buildAgentExplorer(p, rec, deps, mode, since, bud,
+		a.takeoverPrompt(mode, reason), takeoverSystemPrompt,
+		func() { step++; a.reportRecovering(step, reason) })
 
 	rep, cerr := ex.Crawl(tctx)
 	a.recordAgentTrace(reason, rep)
+	if rep != nil {
+		a.trace.AgentSteps += rep.Steps
+	}
 	if cerr != nil {
 		a.log("agent_takeover", map[string]any{"reason": reason, "result": "error", "error": cerr.Error()})
 		return false, cerr
@@ -158,6 +152,185 @@ func (a *Authenticator) runAgent(ctx context.Context, p browser.Page, rec *handb
 	}
 	a.log("agent_takeover", map[string]any{"reason": reason, "result": "failed", "stop": stop})
 	return false, nil
+}
+
+// buildAgentExplorer wires an Explorer whose tools are backed by the
+// Authenticator's own verification/captcha/success/form-fill machinery. It is
+// shared by the recovery takeover (runAgent) and the agent-primary driver
+// (runAgentPrimary); systemPrompt + operator select the role. onStep, if set,
+// is called before each check_logged_in (for a recovering{step} surface).
+// Success is gated ONLY by check_logged_in.
+func (a *Authenticator) buildAgentExplorer(p browser.Page, rec *handback.Recorder, deps FlowDeps, mode Mode, since *time.Time, bud core.Budget, operator, systemPrompt string, onStep func()) *explore.Explorer {
+	ex := &explore.Explorer{
+		Page:         p,
+		Perceiver:    a.Perceiver,
+		Budget:       bud,
+		Audit:        a.Audit,
+		Driver:       explore.DriverLLM,
+		Model:        a.Agent,
+		Secrets:      a.agentSecrets(),
+		Prompt:       operator,
+		SystemPrompt: systemPrompt,
+		MaxSteps:     25,
+		CheckLoggedIn: func(c context.Context) (bool, []string) {
+			if onStep != nil {
+				onStep()
+			}
+			return a.agentCheckLoggedIn(c, p, rec)
+		},
+		RequestHuman: func(c context.Context, r string) error {
+			// The agent asks for a human; the caller performs the actual handoff,
+			// so this just records the intent.
+			a.trace.Add("agent: requested human (%s)", r)
+			return nil
+		},
+	}
+	// Only advertise a tool when its backing resource exists.
+	if a.Verifier != nil {
+		ex.EnterVerification = func(c context.Context, n *perceive.Node, channel string, wantLink bool) (string, error) {
+			return a.agentEnterVerification(c, p, deps, n, channel, wantLink, since)
+		}
+		ex.ResendVerification = func(c context.Context, n *perceive.Node) error {
+			return a.agentResend(c, p, deps, n, since)
+		}
+	}
+	if a.Captcha != nil {
+		ex.SolveCaptcha = func(c context.Context) (string, error) {
+			return a.agentSolveCaptcha(c, p)
+		}
+	}
+	// Form-fill + consent tools are always available (they fill via placeholders;
+	// the real values never reach the model, and the model still decides submit).
+	ex.FillLoginForm = func(c context.Context, n *perceive.Node) (string, error) {
+		return a.agentFillLoginForm(c, p, deps, n)
+	}
+	ex.FillSignupForm = func(c context.Context, n *perceive.Node) (string, error) {
+		return a.agentFillSignupForm(c, p, deps, n)
+	}
+	ex.DismissBanner = func(c context.Context) (string, error) {
+		return a.agentDismissBanner(c, p, deps)
+	}
+	return ex
+}
+
+// runAgentPrimary drives the WHOLE sign-in with the LLM agent from the entry
+// page: no deterministic entry-finder, flow handlers or resolve loop. It
+// navigates to the entry URL, lets the agent fill/submit/verify/dismiss using
+// the tools, and gates success on check_logged_in. Escalation is agent → human
+// → failed; a bot-wall goes straight to a human (the agent is never pointed into
+// one). A hard credentials rejection fails without recovery.
+func (a *Authenticator) runAgentPrimary(ctx context.Context, p browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
+	if a.Agent == nil {
+		return fmt.Errorf("%w: agent-primary auth needs an LLM provider", ErrFlowFailed)
+	}
+	since := time.Now()
+
+	// Navigate to the entry URL. Prefer the operator hint; fall back to the target
+	// root. The agent may click an on-page "Log in" link from there if needed.
+	entryURL := firstNonEmptyStr(hints.LoginURL, a.Target)
+	if mode == Signup {
+		entryURL = firstNonEmptyStr(hints.SignupURL, hints.LoginURL, a.Target)
+	}
+	if err := p.Navigate(ctx, entryURL); err != nil {
+		return fmt.Errorf("auth: navigate to entry %q: %w", entryURL, err)
+	}
+	_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+	a.base = TakeBaseline(ctx, p)
+	a.trace.Entrypoint = entryURL
+	a.trace.EntrypointHow = "agent"
+
+	// A bot-wall at the door goes straight to a human — never drive the agent into
+	// it. (After a submit the same check runs again inside the loop's success
+	// gate; here it covers a block page that greets the very first request.)
+	if st, _, err := a.Perceiver.Perceive(ctx, p); err == nil && IsBlockPage(st) {
+		a.trace.Add("agent-primary: bot-wall at entry → human")
+		return a.escalateHuman(ctx, p, rec, captcha.ReasonBlockPage, fmt.Errorf("%w: bot-wall at entry", ErrUnknownFlow))
+	}
+
+	deps := FlowDeps{Page: p, Perceiver: a.Perceiver, Log: a.log, Trace: a.tracef, Timeout: a.Timeout, Captcha: a.captchaHook(p)}
+
+	bud := core.NewBudget(core.Limits{Steps: 25, Time: 3 * time.Minute})
+	tctx, cancel := bud.Context(ctx)
+	defer cancel()
+
+	a.log("agent_primary", map[string]any{"mode": mode.String(), "entry": entryURL, "result": "start"})
+	step := 0
+	ex := a.buildAgentExplorer(p, rec, deps, mode, &since, bud,
+		a.primaryPrompt(mode, hints), authSystemPrompt,
+		func() { step++; a.reportRecovering(step, "agent-primary") })
+
+	rep, cerr := ex.Crawl(tctx)
+	a.recordAgentTrace("agent-primary", rep)
+	if rep != nil {
+		a.trace.AgentSteps += rep.Steps
+	}
+	if cerr != nil {
+		a.log("agent_primary", map[string]any{"result": "error", "error": cerr.Error()})
+	}
+
+	// Authoritative success gate.
+	if ok, ev := a.agentCheckLoggedIn(ctx, p, rec); ok {
+		a.trace.SuccessEvidence = ev
+		a.trace.Add("agent-primary: authenticated (%s)", strings.Join(ev, ", "))
+		a.log("agent_primary", map[string]any{"result": "success"})
+		return nil
+	}
+
+	// The agent did not authenticate. If a credentials rejection is visible, fail
+	// hard; a bot-wall or any other dead end escalates to a human, then fails.
+	st, _, _ := a.Perceiver.Perceive(ctx, p)
+	if f := Classify(st); f.HasAlert && isCredentialsRejection(f.AlertText) {
+		a.log("agent_primary", map[string]any{"result": "credentials_rejected"})
+		return fmt.Errorf("%w", ErrCredentialsRejected)
+	}
+	reason := captcha.ReasonUnknownFlow
+	if IsBlockPage(st) {
+		reason = captcha.ReasonBlockPage
+	}
+	a.log("agent_primary", map[string]any{"result": "failed"})
+	return a.escalateHuman(ctx, p, rec, reason, fmt.Errorf("%w: agent did not authenticate", ErrAgentTakeoverFailed))
+}
+
+// escalateHuman hands off to a human when one is configured, confirming success
+// afterward; with no human it returns the sentinel failure.
+func (a *Authenticator) escalateHuman(ctx context.Context, p browser.Page, rec *handback.Recorder, reason captcha.BlockReason, sentinel error) error {
+	if a.Recovery != RecoveryOff && a.Handoff != nil {
+		if err := a.doHandoff(ctx, reason); err != nil {
+			return err
+		}
+		if ok, ev := a.confirmAuthenticated(ctx, p, rec); ok {
+			a.trace.SuccessEvidence = ev
+			a.trace.Add("authenticated after human handoff: %s", strings.Join(ev, ", "))
+			return nil
+		}
+	}
+	return sentinel
+}
+
+func firstNonEmptyStr(ss ...string) string {
+	for _, s := range ss {
+		if strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// primaryPrompt is the operator instruction for the agent-primary driver: the
+// goal, the account resources (yes/no only), and the entry URL.
+func (a *Authenticator) primaryPrompt(mode Mode, hints Hints) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Sign in to %s for this account (%s flow).\n\n", a.Target, mode.String())
+	b.WriteString("Account resources available to you (yes/no only — you never see the values):\n")
+	fmt.Fprintf(&b, "- password login: yes\n")
+	fmt.Fprintf(&b, "- email verification: %v\n", yesno(a.hasChannel(verify.Email)))
+	fmt.Fprintf(&b, "- SMS verification: %v\n", yesno(a.hasChannel(verify.SMS)))
+	fmt.Fprintf(&b, "- authenticator (TOTP): %v\n\n", yesno(a.Creds.TOTPSeed != "" || a.hasChannel(verify.TOTP)))
+	if h := firstNonEmptyStr(hints.LoginURL, hints.SignupURL); h != "" {
+		fmt.Fprintf(&b, "You are starting on the sign-in page. ")
+	}
+	b.WriteString("Fill and submit the login form, clear any interstitial or verification step, then call check_logged_in to confirm. Do not guess URLs.")
+	return b.String()
 }
 
 // agentEnterVerification fetches the current code/link from the configured
@@ -216,25 +389,37 @@ func (a *Authenticator) agentResend(ctx context.Context, p browser.Page, deps Fl
 	if target == nil {
 		return fmt.Errorf("no resend control on this page")
 	}
+	// Capture the freshness window BEFORE the click: the resend triggers the
+	// server to deliver the new code during the click, so a timestamp taken after
+	// the click (which, on a slower backend, returns well after delivery) would
+	// exclude the very code we just asked for.
+	before := time.Now()
 	if err := (actor{deps}).click(ctx, target, "resend"); err != nil {
 		return err
 	}
-	*since = time.Now()
+	*since = before
 	_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
 	a.trace.Add("agent takeover: resent verification")
 	return nil
 }
 
-// agentSolveCaptcha runs the existing captcha hook on the current page.
+// agentSolveCaptcha runs the existing captcha hook on the current page. It is
+// idempotent: once a solve is pending (token injected, not yet settled), a
+// repeat call does NOT re-run the solver chain — which would exhaust it and hand
+// off — but tells the agent to submit. This matters with weaker models that
+// re-call solve_captcha because the widget is still visible after a solve.
 func (a *Authenticator) agentSolveCaptcha(ctx context.Context, p browser.Page) (string, error) {
 	hook := a.captchaHook(p)
 	if hook == nil {
 		return "no captcha solver configured", nil
 	}
+	if a.pendingSolve != "" {
+		return "captcha already solved — submit the form now", nil
+	}
 	if err := hook(ctx); err != nil {
 		return "", err
 	}
-	return "captcha handled", nil
+	return "captcha solved — submit the form now", nil
 }
 
 // agentCheckLoggedIn runs deterministic success detection — the only gate on a
@@ -345,4 +530,79 @@ func lastTrace(s []string, n int) []string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// --- agent form-fill + consent tools ---------------------------------------
+// These are the deterministic helpers exposed as tools the agent calls. They
+// fill via actor.typeInto (placeholder path — the real credential never reaches
+// the model), and leave the decision of when to submit to the model.
+
+var (
+	consentRejectRe = regexp.MustCompile(`(?i)(reject|decline|necessary only|only necessary|refuse|deny non)`)
+	consentAcceptRe = regexp.MustCompile(`(?i)(accept|agree|got it|allow all|i understand|^ok$)`)
+)
+
+// agentFillLoginForm fills the current page's login form (identifier + password)
+// without submitting. The model submits with a separate action.
+func (a *Authenticator) agentFillLoginForm(ctx context.Context, p browser.Page, deps FlowDeps, _ *perceive.Node) (string, error) {
+	st := mustPerceive(ctx, a, p)
+	f := Classify(st)
+	if f.Password == nil {
+		return "", fmt.Errorf("no login form (password field) on this page")
+	}
+	act := actor{deps}
+	if f.Identifier != nil && f.Identifier.Value == "" {
+		if err := act.typeInto(ctx, f.Identifier, a.Creds.UsernameOrEmail, "identifier"); err != nil {
+			return "", err
+		}
+	}
+	if err := act.typeInto(ctx, f.Password, a.Creds.Password, "password"); err != nil {
+		return "", err
+	}
+	return "filled username and password; submit when ready", nil
+}
+
+// agentFillSignupForm fills (and submits) the current page's signup form using
+// the existing signup fill logic.
+func (a *Authenticator) agentFillSignupForm(ctx context.Context, p browser.Page, deps FlowDeps, _ *perceive.Node) (string, error) {
+	st := mustPerceive(ctx, a, p)
+	if err := (SignupHandler{}).Run(ctx, st, a.Creds, deps); err != nil {
+		return "", err
+	}
+	return "filled and submitted the signup form", nil
+}
+
+// agentDismissBanner dismisses a cookie/consent banner, preferring the
+// privacy-preserving option (reject non-essential) over accept.
+func (a *Authenticator) agentDismissBanner(ctx context.Context, p browser.Page, deps FlowDeps) (string, error) {
+	st := mustPerceive(ctx, a, p)
+	var reject, accept *perceive.Node
+	for i := range st.Nodes {
+		n := &st.Nodes[i]
+		if n.Tag != "button" && n.Role != "button" && n.Tag != "a" {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(n.Name))
+		if name == "" {
+			continue
+		}
+		if reject == nil && consentRejectRe.MatchString(name) {
+			reject = n
+		}
+		if accept == nil && consentAcceptRe.MatchString(name) {
+			accept = n
+		}
+	}
+	target, label := reject, "rejected non-essential cookies"
+	if target == nil {
+		target, label = accept, "accepted the cookie banner"
+	}
+	if target == nil {
+		return "no cookie/consent banner found", nil
+	}
+	if err := (actor{deps}).click(ctx, target, "consent"); err != nil {
+		return "", err
+	}
+	_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+	return label, nil
 }

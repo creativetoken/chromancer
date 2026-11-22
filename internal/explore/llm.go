@@ -83,6 +83,15 @@ func (e *Explorer) buildSchema() json.RawMessage {
 	if e.RequestHuman != nil {
 		actions = append(actions, "request_human")
 	}
+	if e.FillLoginForm != nil {
+		actions = append(actions, "fill_login_form")
+	}
+	if e.FillSignupForm != nil {
+		actions = append(actions, "fill_signup_form")
+	}
+	if e.DismissBanner != nil {
+		actions = append(actions, "dismiss_banner")
+	}
 	actions = append(actions, "give_up")
 	enumJSON, _ := json.Marshal(actions)
 	return json.RawMessage(fmt.Sprintf(`{
@@ -182,17 +191,18 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 			ts.InTokens, ts.OutTokens = usage.InputTokens, usage.OutputTokens
 		}
 
-		// Loop detection on (state, action, id): a repeat of the exact same action
-		// on the exact same state already produced no new state, so running it
-		// again is pointless. Skip it (don't execute), tell the model that element
-		// is a dead end, and let it choose something else — a single stuck control
-		// must not end an otherwise-productive crawl. Only a run of consecutive
-		// dead-end picks (the model truly stuck) stops the crawl; plateau still
-		// bounds genuine no-progress.
+		// Loop detection on (state, action, id): skip a control ONLY once it has
+		// actually produced no effect here. A control that shows a message or
+		// navigates is never a dead end — re-submitting it is legitimate (e.g. a
+		// login form that returns a validation error then succeeds, whose error
+		// re-render hashes to the same state). Marking a control dead only after a
+		// true no-op avoids skipping the decisive re-submit, while a genuinely inert
+		// control is still skipped on the next pick. A run of consecutive dead picks
+		// stops the crawl; plateau bounds genuine no-progress.
+		lk := ""
 		if act.Action == "click" || act.Action == "type" || act.Action == "select" || act.Action == "submit" {
-			lk := string(hash) + "|" + act.Action + fmt.Sprint(act.ID)
-			loopCount[lk]++
-			if loopCount[lk] >= 2 {
+			lk = string(hash) + "|" + act.Action + fmt.Sprint(act.ID)
+			if loopCount[lk] >= 1 { // previously executed here and did nothing
 				stuckSkips++
 				mem.note(fmt.Sprintf("Element %d via %s here is a dead end (no new effect); do NOT pick it again — choose a different element or navigate elsewhere.", act.ID, act.Action))
 				ts.Outcome = "loop_skip"
@@ -207,6 +217,9 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 		}
 
 		done, outcome := e.applyAction(ctx, ex, st, act, &ts, rep, base, mem)
+		if lk != "" && outcome == "no visible change" {
+			loopCount[lk]++ // mark this control dead here only if it did nothing
+		}
 		if outcome != "no visible change" {
 			stuckSkips = 0
 		}
@@ -374,6 +387,50 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 			return true, "human handoff error: " + err.Error()
 		}
 		return true, "escalated to a human"
+	case "fill_login_form":
+		if e.FillLoginForm == nil {
+			ts.Outcome = "unknown_action"
+			return false, "fill_login_form is not available"
+		}
+		n := findNode(st, act.ID) // the form (or a field in it); callback re-detects
+		if n != nil {
+			ts.TargetID = act.ID
+		}
+		outcome, err := e.FillLoginForm(ctx, n)
+		if err != nil {
+			ts.Outcome = "fill_error"
+			return false, "fill login form error: " + err.Error()
+		}
+		ts.Outcome = "filled_login"
+		return false, "login form: " + outcome
+	case "fill_signup_form":
+		if e.FillSignupForm == nil {
+			ts.Outcome = "unknown_action"
+			return false, "fill_signup_form is not available"
+		}
+		n := findNode(st, act.ID)
+		if n != nil {
+			ts.TargetID = act.ID
+		}
+		outcome, err := e.FillSignupForm(ctx, n)
+		if err != nil {
+			ts.Outcome = "fill_error"
+			return false, "fill signup form error: " + err.Error()
+		}
+		ts.Outcome = "filled_signup"
+		return false, "signup form: " + outcome
+	case "dismiss_banner":
+		if e.DismissBanner == nil {
+			ts.Outcome = "unknown_action"
+			return false, "dismiss_banner is not available"
+		}
+		outcome, err := e.DismissBanner(ctx)
+		if err != nil {
+			ts.Outcome = "banner_error"
+			return false, "dismiss banner error: " + err.Error()
+		}
+		ts.Outcome = "banner:" + outcome
+		return false, "banner: " + outcome
 	case "give_up":
 		rep.StopReason = "give_up"
 		if r := firstNonEmpty(act.Reason, act.Why); r != "" {
@@ -387,7 +444,12 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 	}
 }
 
-// outcomeFrom classifies the result of an action by re-perceiving.
+// outcomeFrom classifies the result of an action by re-perceiving. A click or
+// submit can trigger a form POST whose re-render (an error/success message, often
+// at the SAME URL) lags the action: WaitStable may return on the pre-POST DOM. So
+// when the first read shows no change, settle and re-perceive once more before
+// concluding nothing happened — otherwise the loop detector wrongly marks a
+// working submit control as a dead end and skips the decisive re-submit.
 func (e *Explorer) outcomeFrom(ctx context.Context, actErr error, ts *TraceStep, beforeURL string) string {
 	if actErr != nil {
 		ts.Outcome = "error"
@@ -398,6 +460,17 @@ func (e *Explorer) outcomeFrom(ctx context.Context, actErr error, ts *TraceStep,
 	if err != nil {
 		ts.Outcome = "ok"
 		return "ok"
+	}
+	if msg := pageMessage(st); msg == "" && st.URL == beforeURL {
+		// Possible lagging POST re-render: give it one more bounded settle.
+		select {
+		case <-time.After(250 * time.Millisecond):
+		case <-ctx.Done():
+		}
+		_ = e.Page.WaitStable(ctx, e.PerAction)
+		if st2, _, err2 := e.perceive(ctx); err2 == nil {
+			st = st2
+		}
 	}
 	if msg := pageMessage(st); msg != "" {
 		ts.Outcome = "message_shown"

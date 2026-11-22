@@ -66,6 +66,10 @@ type App struct {
 	// AgentModel, when set, overrides the model handed to the agent takeover.
 	// Used by tests to script the takeover's action sequence.
 	AgentModel explore.LLMModel
+	// AuthDriver selects deterministic (default) or agent-primary sign-in. In
+	// agent-primary mode the LLM agent drives the whole flow from the entry page;
+	// it requires a model (RunAuth fails fast when none is configured).
+	AuthDriver auth.AuthDriver
 }
 
 // New builds an App from config, reading the store key from the environment.
@@ -92,13 +96,13 @@ func buildRouter(l config.LLMConfig) (model.ModelRouter, error) {
 		// deterministic discovery handles the lab apps.
 		return &model.StaticRouter{Default: model.NewMock(func(string) string { return `{"handle":0,"reason":"mock"}` })}, nil
 	case "openai":
-		p := provider.NewOpenAICompat(provider.OpenAIOptions{BaseURL: l.BaseURL, Model: l.Model, JSONMode: l.JSONMode, Vision: l.Vision})
+		p := provider.NewOpenAICompat(provider.OpenAIOptions{BaseURL: l.BaseURL, Model: l.Model, JSONMode: l.JSONMode, Vision: l.Vision, PriceIn: l.PriceIn, PriceOut: l.PriceOut})
 		return &model.StaticRouter{Default: p}, nil
 	case "anthropic":
-		p := provider.NewAnthropic(provider.AnthropicOptions{BaseURL: l.BaseURL, Model: l.Model, Vision: l.Vision})
+		p := provider.NewAnthropic(provider.AnthropicOptions{BaseURL: l.BaseURL, Model: l.Model, Vision: l.Vision, PriceIn: l.PriceIn, PriceOut: l.PriceOut})
 		return &model.StaticRouter{Default: p}, nil
 	case "gemini":
-		p := provider.NewGemini(provider.GeminiOptions{BaseURL: l.BaseURL, Model: l.Model, Vision: l.Vision})
+		p := provider.NewGemini(provider.GeminiOptions{BaseURL: l.BaseURL, Model: l.Model, Vision: l.Vision, PriceIn: l.PriceIn, PriceOut: l.PriceOut})
 		return &model.StaticRouter{Default: p}, nil
 	default:
 		return nil, fmt.Errorf("app: unknown llm provider %q", l.Provider)
@@ -161,13 +165,17 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	// the router. When neither exists, the agent is nil and recovery degrades to
 	// human-only.
 	var agentModel explore.LLMModel
-	if a.Recovery != auth.RecoveryOff {
+	if a.Recovery != auth.RecoveryOff || a.AuthDriver == auth.AuthDriverAgent {
 		switch {
 		case a.AgentModel != nil:
 			agentModel = a.AgentModel
 		case authRouter != nil && authRouter.For(model.TaskPlan) != nil:
 			agentModel = authRouter.For(model.TaskPlan)
 		}
+	}
+	// Agent-primary sign-in needs a model; fail fast with a clear message.
+	if a.AuthDriver == auth.AuthDriverAgent && agentModel == nil {
+		return AuthResult{Err: fmt.Errorf("auth driver 'agent' needs an LLM provider; none configured (set a model API key)"), Reason: "flow_failed"}
 	}
 	if a.Recovery == auth.RecoveryOff {
 		handoff = nil
@@ -214,6 +222,7 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 		Handoff:    handoff,
 		Agent:      agentModel,
 		Recovery:   a.Recovery,
+		AuthDriver: a.AuthDriver,
 		Capture:    handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
 		EntryCache: ws.CacheDir,
 		Timeout:    8 * time.Second,
@@ -223,7 +232,8 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	}
 	res, err := authr.Run(bctx, b, mode, hints)
 	if err != nil {
-		return AuthResult{Err: err, Reason: auth.FailReason(err)}
+		// res carries the partial trace (agent_takeover steps) on failure.
+		return AuthResult{Result: res, Err: err, Reason: auth.FailReason(err)}
 	}
 	return AuthResult{Result: res}
 }

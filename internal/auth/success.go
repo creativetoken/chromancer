@@ -41,10 +41,21 @@ func TakeBaseline(ctx context.Context, p browser.Page) Baseline {
 }
 
 var (
-	authCookieRe = regexp.MustCompile(`(?i)(sess|sid|auth|token|jwt|login|user|id$|_id|remember)`)
-	jwtRe        = regexp.MustCompile(`^eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*$`)
-	authedElRe   = regexp.MustCompile(`(?i)^(log ?out|sign ?out|my account|account|profile|dashboard|settings)\b`)
-	meURLRe      = regexp.MustCompile(`(?i)/(me|session|account|profile|user|whoami|current[-_]?user)(/|\?|$)`)
+	// authCookieRe matches names that indicate a session/auth cookie. The bare
+	// "id" suffixes were deliberately removed: consent-manager and analytics
+	// cookies routinely end in "…ID" (TAconsentID) or carry a browser id
+	// (__bbl_bid), and matching those produced false "authenticated" verdicts.
+	// Real session cookies are still caught by sess/sid/auth/token/jwt/login/
+	// user/uid (PHPSESSID→sess, JSESSIONID→sess, connect.sid→sid, userid→user).
+	authCookieRe = regexp.MustCompile(`(?i)(sess|sid|auth|token|jwt|login|user|uid|remember)`)
+	// nonAuthCookieRe matches names that are NEVER proof of login even when they
+	// match authCookieRe or are HTTPOnly: consent-manager, analytics, CDN /
+	// bot-mitigation, and CSRF cookies are set for logged-out visitors too. They
+	// are recorded as weak evidence (new_cookie) only, never new_auth_cookie.
+	nonAuthCookieRe = regexp.MustCompile(`(?i)(taconsent|tasession|optanon|euconsent|usprivacy|cookielaw|cookieconsent|cmapi|notice_|truste|consent|grecaptcha|recaptcha|_ga|_gid|_gat|_gcl|_fbp|_fbc|_hj|ajs|amplitude|mixpanel|__utm|_clck|_clsk|_pk_|__cf_bm|cf_clearance|_cfuvid|__cflb|incap_|visid_incap|datadome|_abck|bm_sz|ak_bmsc|csrf|xsrf|gtm)`)
+	jwtRe           = regexp.MustCompile(`^eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*$`)
+	authedElRe      = regexp.MustCompile(`(?i)^(log ?out|sign ?out|my account|account|profile|dashboard|settings)\b`)
+	meURLRe         = regexp.MustCompile(`(?i)/(me|session|account|profile|user|whoami|current[-_]?user)(/|\?|$)`)
 )
 
 // SuccessDetector asserts login succeeded from deterministic signals.
@@ -120,7 +131,7 @@ func (SuccessDetector) IsAuthenticated(ctx context.Context, p browser.Page, st p
 func storageEvidence(cur browser.SessionState, base Baseline, trustStorage bool) (evidence []string, strong bool) {
 	for _, c := range cur.Cookies {
 		if old, had := base.Cookies[c.Name]; !had || old != c.Value {
-			if (authCookieRe.MatchString(c.Name) || c.HTTPOnly) && trustStorage {
+			if (authCookieRe.MatchString(c.Name) || c.HTTPOnly) && trustStorage && !nonAuthCookieRe.MatchString(c.Name) {
 				evidence = append(evidence, "new_auth_cookie:"+c.Name)
 				strong = true
 			} else {
@@ -129,7 +140,12 @@ func storageEvidence(cur browser.SessionState, base Baseline, trustStorage bool)
 		}
 	}
 	for k, v := range cur.LocalStorage {
-		if !base.LocalKeys[k] && (jwtRe.MatchString(v) || authCookieRe.MatchString(k)) {
+		if base.LocalKeys[k] {
+			continue
+		}
+		// A JWT value is proof regardless of key name; a name-only match is not
+		// if the key is a known consent/analytics/CDN/CSRF key.
+		if jwtRe.MatchString(v) || (authCookieRe.MatchString(k) && !nonAuthCookieRe.MatchString(k)) {
 			evidence = append(evidence, "new_storage_token:"+k)
 			if trustStorage {
 				strong = true
@@ -137,7 +153,10 @@ func storageEvidence(cur browser.SessionState, base Baseline, trustStorage bool)
 		}
 	}
 	for k, v := range cur.SessionStorage {
-		if !base.SessionKeys[k] && (jwtRe.MatchString(v) || authCookieRe.MatchString(k)) {
+		if base.SessionKeys[k] {
+			continue
+		}
+		if jwtRe.MatchString(v) || (authCookieRe.MatchString(k) && !nonAuthCookieRe.MatchString(k)) {
 			evidence = append(evidence, "new_session_storage_token:"+k)
 			if trustStorage {
 				strong = true

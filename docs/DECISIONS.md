@@ -320,3 +320,61 @@
   flag both engines regardless of fingerprint; B0 measures fingerprint/headless evasion, not IP. · alt:
   real production login pages — rejected (no defined targets, and hammering third-party logins is out
   of scope for a measurement).
+- 2026-11-21 · **Agent-only architecture: promote the existing agent-takeover loop to the sole
+  driver for auth + crawl** · the `internal/explore` Explorer (LLM driver) already owns the
+  observation/action loop, the Executor (deny-list, secret placeholders, untrusted-DATA fencing,
+  pacing), budgets/loop-detection, and the takeover tool callbacks
+  (`EnterVerification`/`ResendVerification`/`SolveCaptcha`/`CheckLoggedIn`/`RequestHuman`). The
+  refactor REMOVES the deterministic orchestration (auth `FlowHandler`s + `DefaultHandlers` +
+  `MultiStepHandler`/`SignupHandler`, the rules-based entry finder + path probing, the `resolve`
+  loop; crawl `bfs`/`hybrid` drivers; recipe replay) and makes the Explorer the only loop, adding
+  the remaining deterministic helpers as **tools** the agent calls: `fill_login_form(form_id)` /
+  `fill_signup_form(form_id)` (the old form-fill logic via placeholders), `dismiss_banner`
+  (cookie/consent). Success stays gated by `check_logged_in` (the existing SuccessDetector). Auth
+  escalation becomes agent → human → failed{reason}; bot-wall → human; wrong-credentials → fail,
+  no retries — all already in the Executor/takeover policy. · alt: keep deterministic-first with
+  agent fallback (the status quo; the operator wants agent-decides-every-step, and the live
+  Symphony SPA proved the deterministic entry finder is the weak link — `entrypoint_not_found`
+  fails before the agent ever runs).
+- 2026-11-21 · **A real LLM provider is required for auth + crawl; tests use a test-only "lab
+  policy" model** · with no provider configured the CLI/MCP fail fast with a clear message
+  (OpenAI-compatible/Ollama count as providers for local models). The mock echo-model can no
+  longer drive, so tests get a `labPolicyModel` (implements the `Structured` LLM interface, reads
+  the observation and returns sensible lab actions) that lives in a `_test`/internal-lab scope and
+  is never constructible from production code. Model routing: a cheap model for routine steps, the
+  plan model on stuck/recovery, both configurable. · alt: keep the echo mock (can't exercise a
+  real decision loop, so it would not prove the agent-only system).
+- 2026-11-21 · **Success detection must not treat consent/CDN/CSRF cookies as login proof** ·
+  Live Bambu Lab run (agent driver, real provider): the agent correctly escalated with
+  `request_human` when it could not find the (now icon-only) sign-in, but the "authoritative
+  success gate" (`agentCheckLoggedIn` → `SuccessDetector.IsAuthenticated`, trustStorage=true)
+  overrode it into `status: done` / `replayable: true` and wrote a bogus session. Cause: the
+  cookie heuristic's bare `id$`/`_id` matched the consent cookie `TAconsentID`, and the HTTPOnly
+  branch matched Cloudflare's `cf_clearance`. Fix: dropped the over-broad `id$`/`_id` from
+  `authCookieRe` (real sessions still match sess/sid/auth/token/jwt/login/user/uid) and added a
+  `nonAuthCookieRe` denylist (consent-manager, analytics, CDN/bot-mitigation, CSRF) that can never
+  be `new_auth_cookie` even when HTTPOnly. Test: `TestStorageEvidenceConsentAndCDNCookiesNotAuth`
+  (the exact Bambu logged-out cookie set is not strong; real `token`/`refreshToken` still are). ·
+  alt: trust only `/me` 2xx + authed-element and drop cookie evidence entirely (regresses sites
+  whose only live signal is a freshly-minted opaque session cookie — see the Freshservice test).
+- 2026-11-21 · **TypeInto falls back to click + direct value-set for guarded code
+  fields** · Live Bambu Lab agent sign-in reached the email-OTP step, fetched the
+  code (verify funnel confirmed fetched/alias/newer/extracted all pass and live
+  GetCode returns the code), but typing it in hit a "focus timeout": rod's Focus/
+  Input wait for interactability and the OTP field does not accept programmatic
+  key events. Fix: after the normal focus+Input, TypeInto reads back the value;
+  if it did not land, it clicks the field (un-guarding readonly/overlay inputs)
+  and sets the value directly with input/change events. Bounded (3s per step) so
+  a stuck field can't hang verification. Repro: lab app `combined-verify-guarded`
+  (code field readonly until a real click) + `TestE2ECombinedVerifyGuarded`,
+  which FAILS without the fallback and PASSES with it. · alt: set value via JS
+  always (drops real key events many forms validate on — kept as fallback only).
+- 2026-11-21 · **A fetched verification code is unclaimed if it cannot be entered**
+  · The code was claimed on fetch (concurrency dedup), so once entry failed every
+  retry saw it as alreadyClaimed (verify funnel: claimed=1 extracted=0) and the
+  server sent no new code — a permanent lockout. Fix: Result carries MsgID; on an
+  entry failure doVerify rolls the freshness window back and calls Unclaim
+  (ClaimStore.Unclaim, exposed via verify.Unclaimer on IMAP/Twilio and forwarded
+  by Chain), so a retry reads the same code again. Tests: TestClaimUnclaimAllowsRetry,
+  TestChainUnclaimForwards. · alt: claim only after successful entry (loses the
+  cross-wait dedup during the attempt).

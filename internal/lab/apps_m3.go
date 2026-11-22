@@ -401,10 +401,13 @@ func (a *formErrorsApp) Register(mux *http.ServeMux, s *Server) {
 	mux.HandleFunc("/form-errors/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
-			ip := r.RemoteAddr
+			// Key the attempt counter on the account (not RemoteAddr): a real
+			// browser driven step-by-step may use a fresh keep-alive connection per
+			// submit, so a port-keyed counter would never reach the second attempt.
+			key := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 			a.mu.Lock()
-			a.attempts[ip]++
-			n := a.attempts[ip]
+			a.attempts[key]++
+			n := a.attempts[key]
 			a.mu.Unlock()
 			if !checkCreds(r.FormValue("email"), r.FormValue("password")) {
 				w.WriteHeader(http.StatusUnauthorized)

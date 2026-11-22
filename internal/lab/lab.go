@@ -357,6 +357,7 @@ func allApps() []App {
 		&captchaRerenderApp{},
 		&combinedVerifyApp{name: "combined-verify", cookie: "cv_sid"},
 		&combinedVerifyApp{name: "combined-verify-intl", cookie: "cvi_sid", intl: true},
+		&combinedVerifyApp{name: "combined-verify-guarded", cookie: "cvg_sid", guarded: true},
 		&interstitialApp{name: "takeover-trust", cookie: "tkt_sid", variant: "trust"},
 		&interstitialApp{name: "takeover-terms", cookie: "tkm_sid", variant: "terms"},
 		&interstitialApp{name: "takeover-injection", cookie: "tki_sid", variant: "injection"},

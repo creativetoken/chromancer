@@ -52,6 +52,10 @@ type Authenticator struct {
 	// handoff tools) before falling back to a human.
 	Agent    explore.LLMModel
 	Recovery RecoveryMode
+	// AuthDriver selects deterministic (default) or agent-primary sign-in. In
+	// agent-primary mode the LLM agent drives the whole flow from the entry page
+	// and the deterministic entry-finder/handlers/resolve loop are not used.
+	AuthDriver AuthDriver
 	// OnRecovering, if set, is called when the agent takes over (step 0) and on
 	// each subsequent agent step, so a control surface can expose a
 	// recovering{step,reason} state. Optional.
@@ -107,7 +111,9 @@ func (a *Authenticator) Run(ctx context.Context, b browser.Browser, mode Mode, h
 
 	// 2/3. Run the flow (entrypoint discovery + fill + submit + verify + success).
 	if err := a.authenticate(ctx, p, rec, mode, hints); err != nil {
-		return handback.Result{}, err
+		// Carry the partial trace out on failure: the agent_takeover step log is
+		// how a failed run (especially a live one) is diagnosed.
+		return handback.Result{Trace: a.trace}, err
 	}
 
 	// 6. Success → post-login capture → bundle → replay → write.
@@ -155,6 +161,11 @@ func (a *Authenticator) tryRestore(ctx context.Context, p browser.Page, rec *han
 }
 
 func (a *Authenticator) authenticate(ctx context.Context, p browser.Page, rec *handback.Recorder, mode Mode, hints Hints) error {
+	// Agent-primary: the LLM agent drives the whole sign-in from the entry page;
+	// the deterministic entry-finder/handlers/resolve loop below are skipped.
+	if a.AuthDriver == AuthDriverAgent {
+		return a.runAgentPrimary(ctx, p, rec, mode, hints)
+	}
 	// Flow start, captured BEFORE the first form submit. A verification code is
 	// sent when the form is submitted (below), so this is the lower bound for
 	// "code newer than the flow" — set it here, not in resolve (which runs after
@@ -564,13 +575,24 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 		}
 		return fmt.Errorf("%w: verification: %v", ErrFlowFailed, err)
 	}
+	// A fetched code is only truly consumed once it has been entered. If entry
+	// fails, roll the freshness window back and release the provider's claim so a
+	// retry can read the SAME code again (the server may not send another).
+	prevSince := *since
 	*since = time.Now()
+	fetchFailed := func(err error) error {
+		*since = prevSince
+		if u, ok := a.Verifier.(verify.Unclaimer); ok {
+			u.Unclaim(res.MsgID)
+		}
+		return err
+	}
 	ac := actor{deps}
 	switch res.Kind {
 	case verify.ResLink:
 		a.trace.Add("verification: opening magic link")
 		if err := p.Navigate(ctx, res.Link); err != nil {
-			return fmt.Errorf("auth: open magic link: %w", err)
+			return fetchFailed(fmt.Errorf("auth: open magic link: %w", err))
 		}
 	case verify.ResCode:
 		if vs.CodeField == nil {
@@ -580,16 +602,16 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 			vs.CodeField, vs.Submit = nv.CodeField, nv.Submit
 		}
 		if vs.CodeField == nil {
-			return fmt.Errorf("%w: got a code but found no code field", ErrFlowFailed)
+			return fetchFailed(fmt.Errorf("%w: got a code but found no code field", ErrFlowFailed))
 		}
 		a.trace.Add("verification: entering code")
 		if err := ac.typeInto(ctx, vs.CodeField, res.Code, "otp"); err != nil {
-			return err
+			return fetchFailed(err)
 		}
 		f := Classify(mustPerceive(ctx, a, p))
 		if err := ac.submit(ctx, Fields{Submit: vs.Submit}, vs.CodeField); err != nil && f.Submit != nil {
 			if err2 := ac.click(ctx, f.Submit, "verify"); err2 != nil {
-				return err2
+				return fetchFailed(err2)
 			}
 		}
 	case verify.ResApproved:

@@ -4,7 +4,7 @@
 > app with **operator-provided credentials**, handles verification/2FA and CAPTCHAs (escalating
 > to a human when fully blocked), then returns a **reusable session bundle** and an **auth-flow
 > recording** so the calling agent can replay exactly how auth works. Model-agnostic, Go,
-> deterministic-first. Exposed as a **CLI and a job-based MCP server**.
+> agent-only (an LLM drives every step; ADR 0017). Exposed as a **CLI and a job-based MCP server**.
 >
 > **No scope enforcement of any kind** — the agent goes wherever the auth flow leads (including
 > IdP/magic-link hosts). Everything is still audited.
@@ -16,12 +16,20 @@
 
 ## 1. Architecture choice (recap)
 
-Hybrid, **deterministic-first** (ADR 0004): a code-first skill layer resolves known patterns
-(form fields, multi-step transitions, cookie banners); the **LLM is invoked only for judgment**
-(which flow variant this is, is this an error, did login succeed). Perception is
-**accessibility-tree-first** with **screenshot + set-of-marks** as a vision escalation. This is
-cheapest, most local-model-friendly, and most auditable — and v1's surface (drive an auth flow
-to completion) is exactly where deterministic skills pay off.
+**Agent-only** (ADR 0017, superseding the deterministic-first ADR 0004): the LLM
+agent decides **every** step of authentication and crawl, and success is
+confirmed only by `check_logged_in` (deterministic cookie/XHR detection). The
+form-filling, verification, CAPTCHA and success-detection code is kept, but as
+**tools the agent calls**, not a driver that precedes it. A real model is
+required (there is no deterministic fallback); tests drive the loop with a
+deterministic, test-only "lab policy" model. Perception stays
+**accessibility-tree-first** with **screenshot + set-of-marks** as a vision
+escalation.
+
+> Historical note: v1 shipped deterministic-first (ADR 0004) — a code-first skill
+> layer with the LLM only for judgment. That is superseded; the brittle
+> deterministic entry finder / flow handlers failed before the agent could run on
+> real SPAs, so the agent-takeover loop was promoted to the sole driver.
 
 ---
 
@@ -286,6 +294,13 @@ The `Authenticator` is the single owner of getting a session and keeping it long
 back. The JobManager calls it; everything below is internal.
 
 ### 6.0 Entrypoint discovery
+> **Agent-only (ADR 0017):** the deterministic resolver below is superseded. In
+> agent-primary mode the `Authenticator` navigates to the operator's
+> `login_url`/`signup_url` (or the target root) and the LLM agent finds and opens
+> the form itself (clicking an on-page "Sign in" link or modal trigger), never
+> guessing URLs. The order below is retained for the one release the deterministic
+> driver is kept available, then removed.
+
 Before any flow runs, the agent must reach the login or signup form. Resolution order:
 1. **Operator hints** — `login_url` / `signup_url` passed to `start_auth`.
 2. **Per-target cache** — an entrypoint discovered on a previous run (invalidated if it no

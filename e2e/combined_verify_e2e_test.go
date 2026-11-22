@@ -29,6 +29,26 @@ func TestE2ECombinedVerify(t *testing.T) {
 	}
 }
 
+// TestE2ECombinedVerifyGuarded reproduces the live Bambu Lab failure: the
+// one-time-code field ignores key events (readonly until a real click) so the
+// code typed by rod's Input never lands and the step times out. It passes only
+// with TypeInto's guarded-input fallback (verify the value took; if not, click
+// to un-guard and set the value directly with input/change events).
+func TestE2ECombinedVerifyGuarded(t *testing.T) {
+	h := newHarness(t)
+	e := h.expect("combined-verify-guarded")
+	inbox := verify.NewLabInbox(h.ts.URL, func(string) string { return e.Username })
+	inbox.Poll = 150 * time.Millisecond
+	creds := identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}
+	res := h.runAuthV(t, "combined-verify-guarded", auth.Login, creds, inbox, auth.Hints{LoginURL: e.LoginURL})
+	if len(res.Trace.Verification) == 0 {
+		t.Fatalf("expected a verification step in trace: %+v", res.Trace)
+	}
+	if len(res.Trace.SuccessEvidence) == 0 {
+		t.Fatalf("expected authentication success evidence (guarded code field must still be entered): %+v", res.Trace)
+	}
+}
+
 // TestE2ECombinedVerifyIntl is the same flow with non-English labels and no
 // verification wording, so the code field is recognisable only from structural
 // signals (numeric inputmode + short maxlength below the credentials). Proves

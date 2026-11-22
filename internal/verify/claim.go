@@ -35,3 +35,15 @@ func (s *ClaimStore) Claimed(id string) bool {
 	defer s.mu.Unlock()
 	return s.claimed[id]
 }
+
+// Unclaim releases a previously claimed id so it can be claimed again. It is
+// used when a code was fetched (and claimed) but could not be entered — the
+// code was never consumed, so a retry must be able to read it again.
+func (s *ClaimStore) Unclaim(id string) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.claimed, id)
+}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/creativetoken/chromancer/internal/app"
@@ -20,6 +21,7 @@ import (
 	"github.com/creativetoken/chromancer/internal/eval"
 	"github.com/creativetoken/chromancer/internal/identity"
 	"github.com/creativetoken/chromancer/internal/lab"
+	"github.com/creativetoken/chromancer/internal/model"
 	"github.com/creativetoken/chromancer/internal/server"
 )
 
@@ -118,6 +120,21 @@ func cmdCreds(ctx context.Context, args []string) error {
 	return nil
 }
 
+// cliAuthDriver resolves the --auth-driver flag for the CLI. The default (empty
+// flag) is the agent driver; "deterministic" is still selectable but deprecated
+// and prints a warning. The library zero value stays deterministic so the
+// existing deterministic test suite is unaffected — only the CLI default flips.
+func cliAuthDriver(s string) (auth.AuthDriver, bool) {
+	if strings.TrimSpace(s) == "" {
+		return auth.AuthDriverAgent, true
+	}
+	ad, ok := auth.ParseAuthDriver(s)
+	if ok && ad == auth.AuthDriverDeterministic {
+		fmt.Fprintln(os.Stderr, "warning: --auth-driver deterministic is deprecated; the agent driver is now the default and the deterministic path will be removed in a future release.")
+	}
+	return ad, ok
+}
+
 func cmdAuth(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	account := fs.String("account", "", "account name")
@@ -126,6 +143,7 @@ func cmdAuth(ctx context.Context, args []string) error {
 	signupURL := fs.String("signup-url", "", "entrypoint hint for signup")
 	headful := fs.Bool("headful", false, "run with a visible browser")
 	recovery := fs.String("recovery", "agent", "dead-end recovery: agent|human|off (agent falls back to human when no LLM is configured)")
+	authDriver := fs.String("auth-driver", "", "sign-in driver: agent (default; LLM drives the whole flow, needs a model) | deterministic (deprecated)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -142,6 +160,10 @@ func cmdAuth(ctx context.Context, args []string) error {
 	if !ok {
 		return fmt.Errorf("--recovery must be agent, human or off")
 	}
+	ad, ok := cliAuthDriver(*authDriver)
+	if !ok {
+		return fmt.Errorf("--auth-driver must be deterministic or agent")
+	}
 	cfg := config.Default()
 	if *headful {
 		cfg.Headless = false
@@ -151,9 +173,17 @@ func cmdAuth(ctx context.Context, args []string) error {
 		return err
 	}
 	a.Recovery = rec
+	a.AuthDriver = ad
 	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL}, nil)
 	if res.Err != nil {
-		out, _ := json.MarshalIndent(map[string]string{"status": "failed", "reason": res.Reason, "error": res.Err.Error()}, "", "  ")
+		// Emit the trace on failure too: the agent_takeover step log (tool calls,
+		// outcomes and the agent's "why") is how a failed live run is diagnosed.
+		out, _ := json.MarshalIndent(map[string]any{
+			"status": "failed",
+			"reason": res.Reason,
+			"error":  res.Err.Error(),
+			"trace":  res.Result.Trace,
+		}, "", "  ")
 		fmt.Println(string(out))
 		return res.Err
 	}
@@ -171,7 +201,7 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("crawl", flag.ContinueOnError)
 	account := fs.String("account", "", "account name")
 	headful := fs.Bool("headful", false, "run with a visible browser")
-	driver := fs.String("driver", "", "crawl driver: bfs (default) | llm | hybrid")
+	driver := fs.String("driver", "", "DEPRECATED (one release): the crawl is LLM-driven; this flag is ignored")
 	prompt := fs.String("prompt", "", "operator instruction for the llm driver (implies --driver llm)")
 	promptFile := fs.String("prompt-file", "", "read the operator instruction from a file")
 	systemPromptFile := fs.String("system-prompt-file", "", "override the built-in system template")
@@ -181,6 +211,9 @@ func cmdCrawl(ctx context.Context, args []string) error {
 	}
 	if *account == "" {
 		return fmt.Errorf("--account is required")
+	}
+	if *driver != "" && *driver != "llm" {
+		fmt.Fprintf(os.Stderr, "warning: --driver is deprecated and will be removed next release; the crawl is now LLM-driven (ignoring --driver=%s)\n", *driver)
 	}
 	opts := app.CrawlOptions{Driver: *driver, Prompt: *prompt, MaxSteps: *maxSteps}
 	if *promptFile != "" {
@@ -221,8 +254,14 @@ func cmdEval(ctx context.Context, args []string) error {
 	runs := fs.Int("runs", 1, "runs per scenario")
 	captchaMode := fs.Bool("captcha", false, "benchmark the CAPTCHA solver chain vs the mock vendor apps")
 	crawlMode := fs.Bool("crawl", false, "benchmark the crawl drivers (bfs, llm, hybrid) vs the lab crawl app")
+	authDriver := fs.String("auth-driver", "", "sign-in driver to benchmark: agent (default) | deterministic (deprecated)")
+	only := fs.String("only", "", "comma-separated scenario app names to run (default: all)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	ad, ok := cliAuthDriver(*authDriver)
+	if !ok {
+		return fmt.Errorf("--auth-driver must be deterministic or agent")
 	}
 	cfg := config.Default()
 	cfg.Headless = true
@@ -230,6 +269,18 @@ func cmdEval(ctx context.Context, args []string) error {
 	a, err := app.New(cfg)
 	if err != nil {
 		return err
+	}
+	a.AuthDriver = ad
+	// For the agent driver, wrap the configured provider so tokens/cost are
+	// measured, and hand it to the agent explicitly.
+	var counter *eval.CountingProvider
+	if ad == auth.AuthDriverAgent {
+		base := a.Router.For(model.TaskPlan)
+		if base == nil || base.Name() == "mock" {
+			return fmt.Errorf("--auth-driver agent needs a real LLM provider; none configured (set e.g. ANTHROPIC_API_KEY)")
+		}
+		counter = &eval.CountingProvider{LLMProvider: base}
+		a.AgentModel = counter
 	}
 	srv := lab.New()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -242,7 +293,11 @@ func cmdEval(ctx context.Context, args []string) error {
 	go hs.Serve(ln)
 	defer hs.Close()
 
-	h := &eval.Harness{App: a, Lab: srv, LabBase: base, ModelName: cfg.LLM.Provider, Runs: *runs}
+	modelName := cfg.LLM.Provider
+	if counter != nil {
+		modelName = counter.Name()
+	}
+	h := &eval.Harness{App: a, Lab: srv, LabBase: base, ModelName: modelName, Runs: *runs, Counter: counter}
 	if *crawlMode {
 		rows, err := h.CrawlBench(ctx, []string{"bfs", "llm", "hybrid"})
 		if err != nil {
@@ -254,6 +309,19 @@ func cmdEval(ctx context.Context, args []string) error {
 	scenarios := eval.DefaultScenarios()
 	if *captchaMode {
 		scenarios = eval.CaptchaScenarios()
+	}
+	if *only != "" {
+		want := map[string]bool{}
+		for _, s := range strings.Split(*only, ",") {
+			want[strings.TrimSpace(s)] = true
+		}
+		var filtered []eval.Scenario
+		for _, sc := range scenarios {
+			if want[sc.App] {
+				filtered = append(filtered, sc)
+			}
+		}
+		scenarios = filtered
 	}
 	rows, err := h.Run(ctx, scenarios)
 	if err != nil {

@@ -19,9 +19,7 @@ stage); live validation was stopped by a verification rate limit (4/5 attempts).
 - `feat/agent-only` → main (step 3): default flip + 3 bug fixes + docs. **MERGED
   (`fcdaccd`).**
 - `feat/icon-signin` → main (step 4): perceiver naming + icon-signin lab (both
-  backends) + prompt rule. Rebased onto current main (merge `b404cfa`), pushed,
-  build/vet/unit green. **Open — ready to merge.**
-  Compare: https://github.com/creativetoken/chromancer/compare/main...feat/icon-signin?expand=1
+  backends) + prompt rule. **MERGED (`62a7bb5`).** Build/vet/unit green at merge.
 
 **Open follow-ups (not done, recorded):**
 1. Live OTP entry into bambulab's code field times out at the element/type stage

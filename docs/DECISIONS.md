@@ -468,3 +468,22 @@
   (code field blocks all real key events) exercises the fallback on both backends. ·
   alt: keep Fill-or-fail (breaks guarded OTP fields on camoufox); a camoufox-only
   code-entry special case (duplicates the rodbackend logic that already works).
+
+- **2026-11-22 · Verification flow triggers "Send code" itself, perception-
+  independently (the real bambulab OTP blocker)** · A diagnostic screenshot of the
+  live OTP modal (saveOTPDebug) showed bambulab does not email a code until a
+  "Send code" button inside the code field is clicked — and the code field was
+  empty across every attempt, so GetCode waited for a code that was never sent and
+  timed out. The agent never clicked "Send code" not because it was gated but
+  because bambulab renders it as a React `<span onClick>` with no onclick
+  attribute / role / href, so the DOM perceiver (which keys on
+  button/a[href]/[role=button]/[onclick]) cannot see it — a perception gap, since
+  the agent can only decide about controls perception surfaces. Decision: doVerify
+  triggers delivery before fetching — clicking a perceived SendCode control if one
+  exists, else finding a "send/get/request/resend … code" trigger by its visible
+  text and clicking it directly in the page (clickSendCodeJS), bypassing the
+  perceiver; the freshness window advances to the click. The agent prompt also
+  tells it to click a perceivable "Send/Get code" control. · alt: broaden the
+  perceiver to capture all React onClick elements (floods the observation in a
+  React app, raises per-step cost); rely on the LLM alone (it can't see the span).
+  Lab repro: verify-sendcode (unperceivable React-span trigger), green both backends.

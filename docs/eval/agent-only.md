@@ -192,6 +192,17 @@ camoufox all pass with `canvas-signin` skipped). Build/vet/lint + unit green.
 | fresh `/en-gb/sign-in` #3 (operator) | agent | **failed: handoff_timeout** | `screenshots=0`, `mode=text`, `stop=plateau`, 10 steps / 44k tokens. The agent called `fill_login_form` on step 1, got "no login form (password field)" (the sign-in form is unreadable in the DOM), and then **never escalated to visual mode** — it spiralled clicking the header icon and timed out at a human handoff. **Root cause + fix below.** |
 | fresh `/en-gb/sign-in` #4 (operator) | agent | **failed: handoff_timeout (OTP entry)** | Much further this time: cookies dismissed, `fill_login_form → filled_login`, submit, then the **email-OTP step** appeared and the code **was fetched** (4× "email sent to …") — but `enter_verification` failed 4× with a "field clear" error. `screenshots=0` (the form was readable, so no escalation needed). **Root cause + fix below.** |
 | fresh `/en-gb/sign-in` #5 (operator) | agent | **failed: handoff_timeout (OTP entry, "timed out")** | Same shape as #4 but the OTP error became "timed out" (3 attempts). The first OTP fix left the `Type` step bounded only by the whole ~20s verify budget, so a guarded field blocked there before the fallback ran. Fixed: each `TypeInto` step is now capped at ~3s (rodbackend parity) and the fallback uses the native value setter (React-safe). |
+| fresh `/en-gb/sign-in` #6 (operator) | agent | **failed: handoff_timeout (OTP never sent)** — ROOT CAUSE | The `otp-debug` screenshot revealed it: bambulab's modal has a **"Send code" button inside the code field**, and the field was **empty** every attempt — bambulab doesn't email a code until "Send code" is clicked, and the agent never clicked it (it's a React `<span onClick>` with no `onclick`/role/href, so the DOM perceiver can't see it). `GetCode` kept waiting for a code that was never sent → "timed out". **Not a gate — a perception gap.** |
+
+**Live-run #6 finding (fixed — likely the real blocker all along):** the
+verification flow now triggers code delivery before fetching — it clicks a
+perceived "Send code" control, else finds one by its visible text and clicks it
+directly (perception-independent, so React rendering doesn't matter). The empty
+code field + "Send code" button means NO codes were actually being sent on runs
+#4–#6, so the earlier "burned codes / throttle" worry was likely wrong. Lab repro
+`verify-sendcode` (unperceivable React-span "Send code") green on both backends.
+See docs/DECISIONS.md (2026-11-22). **Re-run live to confirm the full sign-in now
+completes.**
 
 **Live-run #3 finding (fixed):** the failed step-1 `fill_login_form` set
 `loginAttempted=true`, which the post-login guard in `wantVisual` used to suppress

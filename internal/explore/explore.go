@@ -86,6 +86,13 @@ type Explorer struct {
 	Driver Driver
 	// Model is required for the llm and hybrid drivers.
 	Model LLMModel
+	// VisionModel drives visual-mode steps (viewport screenshot + set-of-marks).
+	// If nil, visual steps fall back to Model — which only works if Model is a
+	// vision-capable provider. Wire a vision-capable provider here (e.g. the plan
+	// model) so visual escalation can read closed-shadow/canvas pages.
+	VisionModel LLMModel
+	// MaxScreenshots caps visual-mode screenshots per run (default 10).
+	MaxScreenshots int
 	// Secrets are the account values the Executor substitutes for placeholders.
 	Secrets Secrets
 	// Prompt is the operator's free-text instruction (llm/hybrid).
@@ -137,6 +144,11 @@ type Explorer struct {
 
 	// hybrid is set by hybridCrawl so the shared BFS loop hands forms to the LLM.
 	hybrid bool
+
+	// --- visual-mode runtime state (llm driver) -----------------------------
+	visualActive     bool // currently escalated to screenshot-driven perception
+	screenshotsUsed  int  // screenshots taken this run (capped by MaxScreenshots)
+	noProgressStreak int  // consecutive steps that produced no visible change
 }
 
 // takeoverMode reports whether any agent-takeover tool is wired, enabling the

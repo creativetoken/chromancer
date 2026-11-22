@@ -286,21 +286,43 @@ func (p *cfPage) ClickAt(ctx context.Context, x, y int) error {
 }
 
 // TypeInto focuses the element, clears it, and types with real key events and a
-// small per-key delay (human-like pacing).
+// small per-key delay (human-like pacing). Each step is best-effort: a guarded
+// one-time-code field (readonly until clicked, or under a transient overlay)
+// rejects a programmatic clear/type, so — mirroring the rodbackend path — the
+// value is verified and, if it did not land, the field is un-guarded with a real
+// click and the value set directly with input/change events a framework listens
+// for. A failed clear must NOT abort the whole verification step (this was the
+// camoufox bambulab OTP failure: el.Fill("") errored and nothing recovered it).
 func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) error {
 	el, err := asHandle(e)
 	if err != nil {
 		return err
 	}
 	_ = el.ScrollIntoViewIfNeeded()
-	if err := p.run(ctx, func() error { return el.Fill("") }); err != nil { // clear
-		return fmt.Errorf("camoufox: clear: %w", err)
-	}
 	delay := float64(20)
-	if err := p.run(ctx, func() error {
+	// Normal path (best-effort — errors swallowed; the fallback below recovers).
+	_ = p.run(ctx, func() error { return el.Focus() })
+	_ = p.run(ctx, func() error { return el.Fill("") }) // clear
+	_ = p.run(ctx, func() error {
 		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: timeoutMs(ctx)})
-	}); err != nil {
-		return fmt.Errorf("camoufox: type: %w", err)
+	})
+	// Did the value land? Real key events silently fail on guarded inputs.
+	if v, verr := el.Evaluate("el => el.value"); verr == nil {
+		if s, ok := v.(string); ok && s == text {
+			return nil
+		}
+	}
+	// Fallback: un-guard with a real click, then set the value directly and fire
+	// the input/change events a framework needs to register it.
+	_ = p.run(ctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: timeoutMs(ctx)}) })
+	if _, jerr := el.Evaluate(`(el, v) => {
+		el.focus();
+		el.value = "";
+		el.value = v;
+		el.dispatchEvent(new Event("input", { bubbles: true }));
+		el.dispatchEvent(new Event("change", { bubbles: true }));
+	}`, text); jerr != nil {
+		return fmt.Errorf("camoufox: type: %w", jerr)
 	}
 	return nil
 }

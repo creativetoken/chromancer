@@ -123,6 +123,10 @@ func TestE2EAgentPrimaryVerifierApps(t *testing.T) {
 		// Code input is remounted after it is perceived (stale handle): the flow
 		// must re-resolve the field by stable attributes before typing.
 		{"verify-rerender", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code field blocks real key events: the code lands only via the backend's
+		// verify-value + direct value-set fallback (camoufox TypeInto parity — the
+		// bambulab OTP failure mode).
+		{"combined-verify-keyguard", lab.DefaultUser, lab.DefaultPass, ""},
 	}
 	for _, c := range cases {
 		c := c

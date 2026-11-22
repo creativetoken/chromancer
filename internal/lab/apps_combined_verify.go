@@ -23,14 +23,15 @@ import (
 // as a code either, so it can only be detected from structural signals
 // (inputmode=numeric + a short maxlength on a field below the credentials).
 type combinedVerifyApp struct {
-	name    string
-	cookie  string
-	intl    bool
-	guarded bool // code field rejects key events until a real click un-guards it
-	mu      sync.Mutex
-	sess    Sessions
-	codes   map[string]string // email -> pending code
-	inbox   *Inbox
+	name     string
+	cookie   string
+	intl     bool
+	guarded  bool // code field rejects key events until a real click un-guards it
+	keyguard bool // code field blocks ALL real key events; only a JS value-set + input event enters it
+	mu       sync.Mutex
+	sess     Sessions
+	codes    map[string]string // email -> pending code
+	inbox    *Inbox
 }
 
 func (a *combinedVerifyApp) Name() string { return a.name }
@@ -49,6 +50,9 @@ func (a *combinedVerifyApp) Expect(base string) Expect {
 	}
 	if a.guarded {
 		notes = "combined form whose code field ignores key events until clicked; the code only lands via click + direct value-set (TypeInto's guarded-input fallback)"
+	}
+	if a.keyguard {
+		notes = "combined form whose code field blocks ALL real key events; the code lands only via the backend's verify-value + direct value-set fallback (camoufox TypeInto parity)"
 	}
 	return Expect{App: a.name, Flow: "form", Root: base + "/" + a.name + "/", LoginURL: base + "/" + a.name + "/login",
 		LandingURL: base + "/" + a.name + "/app", MeURL: base + "/" + a.name + "/api/me",
@@ -99,6 +103,14 @@ func (a *combinedVerifyApp) form(email, password string, withCode bool, errMsg s
 			// click + direct value-set enters the code. A user can still type it
 			// after clicking; the submitted value is honoured either way.
 			fmt.Fprintf(&b, `<label for="code">%s</label><input id="code" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="Verification code" readonly onmousedown="this.removeAttribute('readonly')" required>`,
+				html.EscapeString(lbl["code"]))
+		} else if a.keyguard {
+			// The code field blocks ALL real key events (onkeydown returns false), so
+			// a programmatic Type lands nothing — reproducing an OTP field (as on
+			// bambulab via camoufox) where only the backend's verify-value +
+			// direct-value-set fallback enters the code. A JS value-set + input event
+			// (what the fallback does) is still honoured.
+			fmt.Fprintf(&b, `<label for="code">%s</label><input id="code" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="Verification code" onkeydown="return false" onpaste="return false" required>`,
 				html.EscapeString(lbl["code"]))
 		} else {
 			fmt.Fprintf(&b, `<label for="code">%s</label><input id="code" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="Verification code" required>`,

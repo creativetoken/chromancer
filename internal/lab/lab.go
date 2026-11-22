@@ -358,6 +358,7 @@ func allApps() []App {
 		&combinedVerifyApp{name: "combined-verify", cookie: "cv_sid"},
 		&combinedVerifyApp{name: "combined-verify-intl", cookie: "cvi_sid", intl: true},
 		&combinedVerifyApp{name: "combined-verify-guarded", cookie: "cvg_sid", guarded: true},
+		&combinedVerifyApp{name: "combined-verify-keyguard", cookie: "cvk_sid", keyguard: true},
 		&iconSigninApp{},
 		&shadowLoginApp{},
 		&canvasSigninApp{},

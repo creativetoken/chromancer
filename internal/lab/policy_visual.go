@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/png"
 	"regexp"
+	"sort"
 	"strconv"
 )
 
@@ -87,10 +88,12 @@ func parseViewport(obs string) (int, int) {
 	return w, h
 }
 
-// findColorCenter returns the centroid (in CSS viewport px) of pixels matching
-// colour c within a per-channel tolerance, and whether enough matched. Image
-// coordinates are mapped to CSS px using the viewport dims (vw,vh); when those
-// are unknown it treats image px as CSS px.
+// findColorCenter returns the MEDIAN (in CSS viewport px) of pixels matching
+// colour c within a per-channel tolerance, and whether enough matched. The
+// median — not the mean — is used so scattered false matches (e.g. camoufox's
+// anti-fingerprinting canvas noise speckles green across the whole canvas) do
+// not pull the result off the dense cluster (the actual button). Image
+// coordinates map to CSS px via the viewport dims (vw,vh); unknown → image px.
 func findColorCenter(m image.Image, c [3]uint8, vw, vh int) (int, int, bool) {
 	const tol = 45
 	b := m.Bounds()
@@ -98,29 +101,34 @@ func findColorCenter(m image.Image, c [3]uint8, vw, vh int) (int, int, bool) {
 	if iw == 0 || ih == 0 {
 		return 0, 0, false
 	}
-	var sumX, sumY, n int
+	var xs, ys []int
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			r, g, bl, _ := m.At(x, y).RGBA()
 			if absDiff(int(r>>8), int(c[0])) <= tol &&
 				absDiff(int(g>>8), int(c[1])) <= tol &&
 				absDiff(int(bl>>8), int(c[2])) <= tol {
-				sumX += x - b.Min.X
-				sumY += y - b.Min.Y
-				n++
+				xs = append(xs, x-b.Min.X)
+				ys = append(ys, y-b.Min.Y)
 			}
 		}
 	}
-	if n < 20 {
+	if len(xs) < 20 {
 		return 0, 0, false
 	}
-	cx := sumX / n
-	cy := sumY / n
+	cx := median(xs)
+	cy := median(ys)
 	if vw > 0 && vh > 0 {
 		cx = cx * vw / iw
 		cy = cy * vh / ih
 	}
 	return cx, cy, true
+}
+
+// median returns the median of v (v is modified by sorting).
+func median(v []int) int {
+	sort.Ints(v)
+	return v[len(v)/2]
 }
 
 func absDiff(a, b int) int {

@@ -40,11 +40,11 @@ func (a *canvasSigninApp) page() string {
 (function(){
   var c = document.getElementById('c');
   var ctx = c.getContext('2d');
-  var bx=120, by=90, bw=180, bh=56;
+  var bx=100, by=70, bw=220, bh=90;
   ctx.fillStyle='#f7f7f7'; ctx.fillRect(0,0,420,220);
-  ctx.fillStyle='#222'; ctx.font='18px sans-serif'; ctx.fillText('Welcome — please sign in', 90, 50);
+  ctx.fillStyle='#222'; ctx.font='18px sans-serif'; ctx.fillText('Welcome — please sign in', 90, 40);
   ctx.fillStyle='%s'; ctx.fillRect(bx,by,bw,bh);
-  ctx.fillStyle='#fff'; ctx.font='20px sans-serif'; ctx.fillText('Sign in', bx+52, by+36);
+  ctx.fillStyle='#fff'; ctx.font='22px sans-serif'; ctx.fillText('Sign in', bx+72, by+52);
   c.addEventListener('click', function(e){
     var r=c.getBoundingClientRect();
     var x=e.clientX-r.left, y=e.clientY-r.top;

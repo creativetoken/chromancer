@@ -305,6 +305,17 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	return nil
 }
 
+// TypeText types into the focused element without a handle (visual/coordinate
+// mode). Real key events are dispatched so framework-controlled inputs update.
+func (p *cfPage) TypeText(ctx context.Context, text string) error {
+	kb := p.pg.Keyboard()
+	delay := float64(20)
+	if err := p.run(ctx, func() error { return kb.Type(text, pw.KeyboardTypeOptions{Delay: &delay}) }); err != nil {
+		return fmt.Errorf("camoufox: type text: %w", err)
+	}
+	return nil
+}
+
 func (p *cfPage) SelectOption(ctx context.Context, e browser.Element, value string) error {
 	el, err := asHandle(e)
 	if err != nil {

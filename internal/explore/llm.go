@@ -377,7 +377,9 @@ func (e *Explorer) applyAction(ctx context.Context, ex *Executor, st perceive.St
 		if n != nil {
 			ts.TargetID = act.ID
 		}
-		outcome, err := e.EnterVerification(ctx, n, strings.ToLower(act.Channel), strings.EqualFold(act.Want, "link"))
+		// x,y (when the model supplies them in visual mode) let the callback enter
+		// the code by coordinate for a non-perceivable (closed-shadow) code field.
+		outcome, err := e.EnterVerification(ctx, n, strings.ToLower(act.Channel), strings.EqualFold(act.Want, "link"), act.X, act.Y)
 		if err != nil {
 			ts.Outcome = "verify_error"
 			return false, "verification error: " + err.Error()

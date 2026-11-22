@@ -599,11 +599,46 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 			return fetchFailed(fmt.Errorf("auth: open magic link: %w", err))
 		}
 	case verify.ResCode:
-		if vs.CodeField == nil {
-			// Re-perceive to locate the code field.
-			st, _, _ := a.Perceiver.Perceive(ctx, p)
-			nv := DetectVerifyStep(st)
-			vs.CodeField, vs.Submit = nv.CodeField, nv.Submit
+		// Visual entry: a non-perceivable (closed-shadow) code field — focus the
+		// coordinate the agent supplied and type the code into focus. The code is
+		// typed by the browser, never surfaced to the model.
+		if vs.Visual {
+			a.trace.Add("verification: entering code (visual)")
+			if err := ac.clickAt(ctx, vs.VisualX, vs.VisualY, "otp-focus"); err != nil {
+				return fetchFailed(err)
+			}
+			if err := ac.typeTextFocused(ctx, res.Code, "otp"); err != nil {
+				return fetchFailed(err)
+			}
+			break
+		}
+		// Re-resolve the code field against FRESH perception right before typing.
+		// The field perceived earlier may have re-rendered during the (slow) code
+		// fetch, leaving its handle stale; match a fresh node by stable attributes
+		// instead of trusting the old handle. Only replace on a confident match, so
+		// a non-match keeps the prior behaviour.
+		if a.Perceiver != nil {
+			if fresh, _, perr := a.Perceiver.Perceive(ctx, p); perr == nil {
+				nv := DetectVerifyStep(fresh)
+				if vs.CodeField != nil {
+					if m, ok := perceive.MatchNode(fresh, *vs.CodeField); ok {
+						vs.CodeField = m
+					} else if nv.CodeField != nil {
+						vs.CodeField = nv.CodeField
+					}
+				} else {
+					vs.CodeField = nv.CodeField
+				}
+				if vs.Submit != nil {
+					if m, ok := perceive.MatchNode(fresh, *vs.Submit); ok {
+						vs.Submit = m
+					} else if nv.Submit != nil {
+						vs.Submit = nv.Submit
+					}
+				} else if nv.Submit != nil {
+					vs.Submit = nv.Submit
+				}
+			}
 		}
 		if vs.CodeField == nil {
 			return fetchFailed(fmt.Errorf("%w: got a code but found no code field", ErrFlowFailed))

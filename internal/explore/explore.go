@@ -116,8 +116,11 @@ type Explorer struct {
 	// EnterVerification fetches the current verification code/link from the
 	// configured channel (honouring since/claims/alias) and enters it. n is the
 	// model-chosen target field (may be nil; the callback re-detects the field).
-	// It returns a short outcome label, never the code.
-	EnterVerification func(ctx context.Context, n *perceive.Node, channel string, wantLink bool) (string, error)
+	// x,y are an optional viewport coordinate (CSS px) for VISUAL entry when the
+	// code field is not perceivable (closed shadow root) — 0,0 means none; the
+	// callback focuses that point and types the code into focus. It returns a short
+	// outcome label, never the code.
+	EnterVerification func(ctx context.Context, n *perceive.Node, channel string, wantLink bool, x, y int) (string, error)
 	// ResendVerification triggers a fresh code (clicks the resend control, bumps
 	// the since window). n is the model-chosen resend control (may be nil).
 	ResendVerification func(ctx context.Context, n *perceive.Node) error

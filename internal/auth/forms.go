@@ -267,6 +267,35 @@ func (a actor) typeInto(ctx context.Context, n *perceive.Node, text, label strin
 	return nil
 }
 
+// clickAt clicks a raw viewport coordinate (CSS px) — used to focus a field that
+// has no perceivable handle (closed shadow root) before typing into focus.
+func (a actor) clickAt(ctx context.Context, x, y int, label string) error {
+	cctx, cancel := a.bound(ctx)
+	defer cancel()
+	if err := a.d.Page.ClickAt(cctx, x, y); err != nil {
+		return fmt.Errorf("%s: click_at (%d,%d): %w", label, x, y, err)
+	}
+	a.d.Log("action", map[string]any{"kind": "click_at", "x": x, "y": y, "label": label})
+	return nil
+}
+
+// typeTextFocused types into whatever element currently holds focus (after a
+// clickAt focused a non-perceivable field). The text is typed by the browser, so
+// a secret (an OTP code) is never surfaced to the model.
+func (a actor) typeTextFocused(ctx context.Context, text, label string) error {
+	to := a.d.Timeout
+	if to < 20*time.Second {
+		to = 20 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, to)
+	defer cancel()
+	if err := a.d.Page.TypeText(cctx, text); err != nil {
+		return fmt.Errorf("%s: type into focus: %w", label, err)
+	}
+	a.d.Log("action", map[string]any{"kind": "type_text", "field": label})
+	return nil
+}
+
 func (a actor) click(ctx context.Context, n *perceive.Node, label string) error {
 	cctx, cancel := a.bound(ctx)
 	defer cancel()

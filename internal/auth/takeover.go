@@ -188,8 +188,8 @@ func (a *Authenticator) buildAgentExplorer(p browser.Page, rec *handback.Recorde
 	}
 	// Only advertise a tool when its backing resource exists.
 	if a.Verifier != nil {
-		ex.EnterVerification = func(c context.Context, n *perceive.Node, channel string, wantLink bool) (string, error) {
-			return a.agentEnterVerification(c, p, deps, n, channel, wantLink, since)
+		ex.EnterVerification = func(c context.Context, n *perceive.Node, channel string, wantLink bool, x, y int) (string, error) {
+			return a.agentEnterVerification(c, p, deps, n, channel, wantLink, x, y, since)
 		}
 		ex.ResendVerification = func(c context.Context, n *perceive.Node) error {
 			return a.agentResend(c, p, deps, n, since)
@@ -337,7 +337,7 @@ func (a *Authenticator) primaryPrompt(mode Mode, hints Hints) string {
 // agentEnterVerification fetches the current code/link from the configured
 // channel and enters it, reusing doVerify (which honours since/claims/alias).
 // It returns only an outcome label — never the code.
-func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Page, deps FlowDeps, n *perceive.Node, channel string, wantLink bool, since *time.Time) (string, error) {
+func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Page, deps FlowDeps, n *perceive.Node, channel string, wantLink bool, x, y int, since *time.Time) (string, error) {
 	st := mustPerceive(ctx, a, p)
 	vs := DetectVerifyStep(st)
 	if !vs.Needed {
@@ -354,6 +354,15 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Pa
 	}
 	if wantLink {
 		vs.LinkOnly = true
+	}
+	// Visual entry: no perceivable code field, but the agent (in visual mode)
+	// supplied a coordinate for one it can SEE (a closed shadow root). Enter the
+	// code by focus + type-into-focus instead of by a (non-existent) handle.
+	if vs.CodeField == nil && !vs.LinkOnly && (x != 0 || y != 0) {
+		vs.Needed = true
+		vs.Visual = true
+		vs.VisualX = x
+		vs.VisualY = y
 	}
 	// The agent gets a full verification window, not the (possibly short)
 	// VerifyTimeout that only exists to trigger the deterministic→agent handoff:

@@ -46,7 +46,7 @@ func TestBuildSchemaGating(t *testing.T) {
 
 	// All callbacks set → all verbs present.
 	full := &Explorer{
-		EnterVerification:  func(context.Context, *perceive.Node, string, bool) (string, error) { return "", nil },
+		EnterVerification:  func(context.Context, *perceive.Node, string, bool, int, int) (string, error) { return "", nil },
 		ResendVerification: func(context.Context, *perceive.Node) error { return nil },
 		SolveCaptcha:       func(context.Context) (string, error) { return "", nil },
 		CheckLoggedIn:      func(context.Context) (bool, []string) { return false, nil },

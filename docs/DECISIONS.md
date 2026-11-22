@@ -455,3 +455,16 @@
   interstitials would wrongly re-trigger visual — the regression this guard was
   added to fix); escalate on any fill error (a type failure on a found field is
   not a readability problem).
+
+- **2026-11-22 · camoufox TypeInto reaches parity with rodbackend's guarded-input
+  fallback (live bambulab OTP fix)** · A live run got through login on camoufox and
+  reached the email-OTP step, but `cfPage.TypeInto` hard-failed at `el.Fill("")`
+  on the guarded code field and had no recovery, so the fetched code never landed
+  (4 failed attempts → human handoff). The rodbackend path already handled this:
+  type real key events, verify `el.value` took, and if not, un-guard with a real
+  click and set the value directly firing input/change. Decision: `cfPage.TypeInto`
+  now does the same — best-effort focus/clear/type (errors swallowed), value check,
+  then the click + direct-value-set fallback. Lab repro `combined-verify-keyguard`
+  (code field blocks all real key events) exercises the fallback on both backends. ·
+  alt: keep Fill-or-fail (breaks guarded OTP fields on camoufox); a camoufox-only
+  code-entry special case (duplicates the rodbackend logic that already works).

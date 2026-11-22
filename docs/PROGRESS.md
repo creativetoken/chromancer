@@ -1,4 +1,38 @@
-Status: complete
+Status: in progress — visual perception
+
+## Visual perception for the agent (feat/visual-perception, 2026-11-22)
+
+**Goal:** the agent takes screenshots, reasons over them, and acts by set-of-marks
+numbers or coordinates when the DOM can't be read. Definition of done:
+1. `auth --auth-driver agent` logs into bambulab.com COLD (no --login-url, cache
+   cleared) and passes check_logged_in.
+2. closed-shadow-root and canvas-icon lab apps log in via visual mode on chromium
+   AND camoufox.
+3. build/vet/lint + full unit suite + full lab e2e green on both backends.
+
+**Plan / checklist:**
+- [ ] 1. `Page.TypeText(ctx, text)` — type into focused element, both backends.
+- [ ] 2. Visual observe step: viewport screenshot → vision model; Go-drawn
+      set-of-marks numbers over perceived nodes (DPR, scroll, downscale handled).
+- [ ] 3. Actions: `look()`, `click(number)`, `click_at(x,y)`, `type_text(text)`
+      + existing scroll/submit/wait/tools; fresh screenshot after each.
+- [ ] 4. Escalation: text path by default; switch to visual when cheap checks
+      fail / perceiver reports NeedsVision / 2 steps no progress / before
+      request_human; drop back when a perceivable form appears.
+- [ ] 5. Perceiver: walk OPEN shadow roots + resolve handles inside them.
+- [ ] 6. Routing: visual steps on plan model; cap screenshots/run (10); count
+      image tokens in budget.
+- [ ] 7. Safety: focus-is-editable check before password type_text; placeholders
+      via Executor; click_at through Executor (deny-list + audit).
+- [ ] 8. Lab apps: closed-shadow-root login + canvas sign-in icon; pass visual on
+      both backends.
+- [ ] 9. Live: warm then cold bambulab (≤3/hr, ≥20min apart; 2h on throttle);
+      record in docs/eval/agent-only.md; restore session each run.
+- [ ] 10. PR + ARCHITECTURE/README/eval docs; set Status: complete.
+
+**Live-attempt log (this effort):** _(none yet)_
+
+---
 
 ## Summary — agent-default push (2026-11-21)
 

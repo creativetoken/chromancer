@@ -390,3 +390,19 @@
   the text-naming path already resolves the lab repro at far lower cost. Revisit
   if real-site runs show naming is insufficient. · alt: build set-of-marks now
   (larger change, higher per-step cost, not required to pass the repro).
+
+- **2026-11-22 · Visual perception = screenshot + Go-drawn set-of-marks, as an
+  escalation (not a replacement)** · The text/DOM perceiver is blind to closed
+  shadow roots, cross-origin iframes and canvas-drawn controls (confirmed live on
+  bambulab: `fill_login_form` returned "no visible email or password fields", yet
+  the fields render for a human). Decision: add a visual mode where the agent gets
+  a viewport screenshot with numbered set-of-marks over perceived DOM nodes, and
+  can also click raw coordinates for regions with NO node. Marks are drawn in Go
+  on the captured PNG (not injected into the page) so they survive shadow/canvas
+  and don't perturb the DOM. Visual mode is an ESCALATION: the cheap text path runs
+  by default and we switch only when it can't find a login affordance, to keep
+  per-step cost down (screenshots + image tokens are expensive). · alts: (a)
+  always-visual driving — simpler loop but pays vision cost on every site and every
+  step; (b) inject DOM overlays for marks — perturbs the page and still can't mark
+  canvas/closed-shadow controls. · Credentials stay placeholder-substituted by the
+  Executor; click_at goes through the Executor deny-list + audit like any action.

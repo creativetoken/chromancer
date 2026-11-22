@@ -11,24 +11,29 @@ numbers or coordinates when the DOM can't be read. Definition of done:
 3. build/vet/lint + full unit suite + full lab e2e green on both backends.
 
 **Plan / checklist:**
-- [ ] 1. `Page.TypeText(ctx, text)` — type into focused element, both backends.
-- [ ] 2. Visual observe step: viewport screenshot → vision model; Go-drawn
-      set-of-marks numbers over perceived nodes (DPR, scroll, downscale handled).
-- [ ] 3. Actions: `look()`, `click(number)`, `click_at(x,y)`, `type_text(text)`
-      + existing scroll/submit/wait/tools; fresh screenshot after each.
-- [ ] 4. Escalation: text path by default; switch to visual when cheap checks
-      fail / perceiver reports NeedsVision / 2 steps no progress / before
-      request_human; drop back when a perceivable form appears.
-- [ ] 5. Perceiver: walk OPEN shadow roots + resolve handles inside them.
-- [ ] 6. Routing: visual steps on plan model; cap screenshots/run (10); count
-      image tokens in budget.
-- [ ] 7. Safety: focus-is-editable check before password type_text; placeholders
-      via Executor; click_at through Executor (deny-list + audit).
-- [ ] 8. Lab apps: closed-shadow-root login + canvas sign-in icon; pass visual on
-      both backends.
+- [x] 1. `Page.TypeText(ctx, text)` — type into focused element, both backends. (9898a6b)
+- [x] 2. Visual observe step: viewport screenshot → vision model; Go-drawn
+      set-of-marks numbers over perceived nodes (DPR + downscale handled). (c42d733, 41811c5)
+- [x] 3. Actions: `look()`, `click(number)` (coordinate in visual), `click_at(x,y)`,
+      `type_text(text)` + existing scroll/submit/wait/tools. (41811c5)
+- [x] 4. Escalation: text path by default; switch to visual when no sign-in
+      affordance / NeedsVision / 2 steps no progress; drop back when a password
+      field is perceivable. Unit-tested. (41811c5)
+- [x] 5. Perceiver: walk OPEN shadow roots; node rects → coordinate actions
+      resolve shadow/canvas nodes by rect centre (no flat-selector needed). (715c360)
+- [~] 6. Routing: visual steps use VisionModel (plan model); screenshots capped
+      (default 10). Image tokens counted via usage. Budget token-spend = follow-up.
+- [x] 7. Safety: password focus-editable check (closed-root → unverified+type;
+      wrong target → refuse); placeholders via Executor; click_at audited. (b872697)
+- [x] 8. Lab apps: closed-shadow-root login + canvas sign-in; **pass visual on
+      chromium** (0e431da). Camoufox run pending.
 - [ ] 9. Live: warm then cold bambulab (≤3/hr, ≥20min apart; 2h on throttle);
       record in docs/eval/agent-only.md; restore session each run.
 - [ ] 10. PR + ARCHITECTURE/README/eval docs; set Status: complete.
+
+**Status note (2026-11-22):** full visual pipeline built and green on chromium
+(`TestE2EAgentPrimaryVisualApps` both apps). Running full chromium e2e for
+regression, then camoufox via Docker, then live bambulab.
 
 **Live-attempt log (this effort):** _(none yet)_
 

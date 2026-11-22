@@ -49,19 +49,36 @@ func (e *Explorer) wantVisual(st perceive.State) bool {
 	if e.visualActive {
 		return true // stay visual until a form appears or budget runs out
 	}
-	// NeedsVision (no interactive nodes, or a canvas-only UI) is an unambiguous
-	// signal the page cannot be read as text — escalate regardless of phase.
-	if e.Perceiver != nil && e.Perceiver.NeedsVision(st) {
+	// A visible canvas is an unambiguous "can't read this as text" signal (a
+	// control painted on a canvas) at any phase.
+	if hasVisibleCanvas(st) {
 		e.visualActive = true
 		return true
 	}
-	// The stall / no-affordance triggers are for the FORM-FINDING phase only. Once
-	// a login form has been filled, interstitials (trust/terms) and verification
-	// pages legitimately have no sign-in affordance and may not change state every
-	// step — those belong to the text path, not visual mode.
-	if !e.loginAttempted && (e.noProgressStreak >= 2 || noSignInAffordance(st)) {
+	// The remaining triggers are for the FORM-FINDING phase only. Once a login
+	// form has been filled (or an identifier submitted), a page with no readable
+	// controls is a "check your email" / processing / interstitial page that the
+	// text path owns (enter_verification, a trust/terms button) — NOT a hidden
+	// form. Escalating there would hijack the flow into a dead visual loop.
+	if e.loginAttempted {
+		return false
+	}
+	// Pre-login: no interactive nodes at all (a form hidden in a closed shadow
+	// root), or a stall / no sign-in affordance while hunting for the form.
+	if len(st.Nodes) == 0 || e.noProgressStreak >= 2 || noSignInAffordance(st) {
 		e.visualActive = true
 		return true
+	}
+	return false
+}
+
+// hasVisibleCanvas reports whether the page has a visible <canvas> (a control may
+// be painted on it, invisible to the DOM).
+func hasVisibleCanvas(st perceive.State) bool {
+	for _, n := range st.Nodes {
+		if n.Tag == "canvas" && n.Visible {
+			return true
+		}
 	}
 	return false
 }
@@ -120,7 +137,10 @@ func actAttemptsLogin(a llmAction) bool {
 	case "fill_login_form", "fill_signup_form":
 		return true
 	case "type", "type_text":
-		return strings.Contains(a.Text, "password")
+		// Any credential/identifier placeholder ends the form-finding phase,
+		// including passwordless flows (magic link / email-only) that submit just
+		// an email and then wait on a "check your email" page.
+		return strings.Contains(a.Text, "{{account.")
 	}
 	return false
 }

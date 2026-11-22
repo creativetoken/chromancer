@@ -244,7 +244,8 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 		}
 		// Once a login form is filled/typed, the form-finding phase is over: later
 		// interstitials/verification pages must not trigger visual escalation.
-		if actAttemptsLogin(act) || strings.Contains(outcome, "login form: filled") || strings.Contains(outcome, "signup form:") {
+		if actAttemptsLogin(act) || act.Action == "enter_verification" || act.Action == "resend_verification" ||
+			strings.Contains(outcome, "login form: filled") || strings.Contains(outcome, "signup form:") {
 			e.loginAttempted = true
 		}
 		mem.record(act, outcome)

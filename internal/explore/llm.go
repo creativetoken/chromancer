@@ -242,10 +242,20 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 		} else {
 			e.noProgressStreak = 0
 		}
-		// Once a login form is filled/typed, the form-finding phase is over: later
-		// interstitials/verification pages must not trigger visual escalation.
-		if actAttemptsLogin(act) || act.Action == "enter_verification" || act.Action == "resend_verification" ||
-			strings.Contains(outcome, "login form: filled") || strings.Contains(outcome, "signup form:") {
+		// A fill that reported no readable email/password fields is a direct "the DOM
+		// can't be read" signal (the form is in a closed shadow root / canvas /
+		// iframe, as on bambulab): flag it so visual mode escalates on the next step
+		// rather than waiting out a stall streak. Cleared once a form is readable.
+		if (act.Action == "fill_login_form" || act.Action == "fill_signup_form") && fillFoundNoForm(outcome) {
+			e.fillFoundNoForm = true
+		}
+		// Once a login form is actually filled/typed, the form-finding phase is over:
+		// later interstitials/verification pages must not trigger visual escalation.
+		// A fill that found NO form (fill_error) does NOT end form-finding — the form
+		// was never there, so visual escalation must stay available (otherwise a
+		// speculative fill_login_form on an unreadable page, as on bambulab, would
+		// permanently suppress visual mode).
+		if marksLoginDone(act, outcome) {
 			e.loginAttempted = true
 		}
 		mem.record(act, outcome)

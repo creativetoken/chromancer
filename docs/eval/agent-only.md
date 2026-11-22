@@ -189,24 +189,46 @@ camoufox all pass with `canvas-signin` skipped). Build/vet/lint + unit green.
 |---|---|---|---|
 | warm `/en-gb/sign-in` #1 | agent | restored (no login) | a healthy saved session was restored, so no fresh sign-in occurred; the restore confirms the account/credentials are healthy (fresh `refreshToken`/`token` cookies), but it did not exercise the login form |
 | warm `/en-gb/sign-in` #2 | agent | **not run** | the fresh-login attempt (saved session moved aside to force a real sign-in) was **denied by the harness auto-mode classifier** as a destructive/unwanted action — an autonomous live external login with real credentials cannot be run from this session |
+| fresh `/en-gb/sign-in` #3 (operator) | agent | **failed: handoff_timeout** | `screenshots=0`, `mode=text`, `stop=plateau`, 10 steps / 44k tokens. The agent called `fill_login_form` on step 1, got "no login form (password field)" (the sign-in form is unreadable in the DOM), and then **never escalated to visual mode** — it spiralled clicking the header icon and timed out at a human handoff. **Root cause + fix below.** |
+
+**Live-run #3 finding (fixed):** the failed step-1 `fill_login_form` set
+`loginAttempted=true`, which the post-login guard in `wantVisual` used to suppress
+all visual escalation — so on bambulab's unreadable form the agent could never
+look. Fix: form-finding ends only on a fill/type that actually progressed
+(`marksLoginDone`), never on a fill that found no form; and a "no form" fill now
+flags `fillFoundNoForm` so visual mode escalates on the next step. See
+docs/DECISIONS.md (2026-11-22) and `internal/explore/visual.go`. Unit-tested
+(`marksLoginDone`, `fillFoundNoForm`, escalation); the deterministic lab policy
+cannot reproduce the LLM's speculative fill (it only fills a perceivable form), so
+coverage is at the unit level. **Re-run live to confirm the agent now escalates.**
 
 **Status:** the live cold/warm sign-in via visual mode is **not yet confirmed**.
 The autonomous run cannot submit a live login (classifier denial); it must be run
-by the operator (as the earlier live runs were). The command below runs a fresh
-warm login. It is wrapped in a subshell with a trap so the **saved session is
-restored on ANY exit** — success, failure, or Ctrl-C — not only on success, and
-the `agentbrowser` run prints a **one-line summary** to stderr at the end
-(`[auth] result=… driver=agent backend=camoufox mode=text+visual steps=… screenshots=… tokens=…/…`):
+by the operator (as the earlier live runs were). Run the committed script from the
+repo root:
 
 ```sh
-# From the repo root. The subshell's trap restores the saved Bambu Lab session
-# whatever happens; the run's last stderr line is the summary.
+bash scripts/live-bambulab.sh
+```
+
+It moves the saved session aside to force a real sign-in and **restores it on ANY
+exit** — success, failure, or Ctrl-C — via a trap, and the `agentbrowser` run
+prints a **one-line summary** to stderr at the end
+(`[auth] result=… driver=agent backend=camoufox mode=text+visual steps=… screenshots=… tokens=…/…`).
+`mode=text+visual` means the run escalated to visual mode at least once; `mode=text`
+means it never did (on the unreadable bambulab form it now should — see the
+live-run #3 fix above). Running a committed script avoids the earlier paste
+artifact (a dropped subshell `(` left a stray `mv` and could skip the restore); if
+you prefer to paste the steps, include the whole subshell:
+
+```sh
+# Equivalent inline form — paste the ENTIRE block including the leading "(".
 (
   set -u
   SESS=.workspace/accounts/bambulab/session.enc
   restore() { [ -f "$SESS.save" ] && mv -f "$SESS.save" "$SESS" && echo "[live] restored saved Bambu Lab session"; }
   trap restore EXIT INT TERM
-  [ -f "$SESS" ] && mv "$SESS" "$SESS.save"   # move the saved session aside to force a real sign-in
+  [ -f "$SESS" ] && mv "$SESS" "$SESS.save"
 
   docker run --rm -it -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
    'set -a; . /src/.env.live; set +a; export AGENTBROWSER_BACKEND=camoufox AGENTBROWSER_WORKSPACE=/src/.workspace AGENTBROWSER_RESOURCES=/src/configs/resources.example.yaml PATH=/usr/local/go/bin:$PATH; \
@@ -214,10 +236,6 @@ the `agentbrowser` run prints a **one-line summary** to stderr at the end
     go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --login-url https://bambulab.com/en-gb/sign-in'
 )
 ```
-
-The restore runs via the trap, so the saved session is put back even if the
-`docker run` fails or is interrupted. (`mode=text+visual` in the summary means the
-run escalated to visual mode at least once; `mode=text` means it never needed to.)
 
 Expectation: on bambulab's unreadable sign-in form the agent should escalate to
 visual mode (it does on the `shadow-login` repro) and drive the fields by

@@ -65,8 +65,26 @@ re-run green on both backends against the final code (chromium ok 338s; camoufox
 ok 310s; build/vet/lint + 22 unit packages green). `agentbrowser auth` prints a
 one-line run summary; the §5 live command restores the saved session on any exit.
 
-**Live-attempt log (this effort):** _(none — live step still blocked by the
-auto-mode classifier; operator-run only, command in docs/eval/agent-only.md §5)_
+**Live-run #3 (operator, 2026-11-22) + fix:** a fresh operator run failed
+`handoff_timeout` with `screenshots=0`/`mode=text` — the agent's speculative
+step-1 `fill_login_form` got "no login form (password field)" and that failed fill
+set `loginAttempted`, which suppressed visual escalation for the whole run. Fixed:
+`loginAttempted` is set only on a login/credential action that did NOT error
+(`marksLoginDone`); a "no form" fill flags `fillFoundNoForm` to escalate next step.
+A successful credential type is a visual no-op, so the gate is absence-of-error,
+not a page change (keeps the passwordless magic-link path on the text path).
+Unit-tested; chromium + camoufox full agent-primary green with the fix (see note).
+Committed a `scripts/live-bambulab.sh` wrapper (restores session on any exit;
+avoids the paste artifact that dropped the subshell). Re-run live to confirm.
+
+**Known camoufox flake:** `spa-jwt` is nondeterministic on camoufox (isolated 3×:
+FAIL/PASS/PASS) — a first-run SPA-submit timing race (the submit click can land
+before the SPA's JS handler is ready), independent of the visual-perception work
+(its path touches none of these changes; chromium is deterministically green).
+Tracked as a separate camoufox robustness follow-up, not a regression.
+
+**Live-attempt log (this effort):** #3 operator run — failed `handoff_timeout`
+(escalation bug, now fixed); live visual sign-in still unconfirmed.
 
 ---
 

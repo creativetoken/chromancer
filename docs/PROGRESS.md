@@ -1,4 +1,4 @@
-Status: in progress — visual perception (feature complete + lab-green on both backends; live bambulab sign-in blocked by the session's auto-mode classifier — needs the operator to run it; PR ready to open)
+Status: in progress — visual perception (feature complete incl. OTP stale-field fix + visual OTP entry; full agent-primary e2e green on both backends; live bambulab sign-in blocked by the session's auto-mode classifier — needs the operator to run it; PR ready to open)
 
 ## Visual perception for the agent (feat/visual-perception, 2026-11-22)
 
@@ -54,10 +54,19 @@ numbers or coordinates when the DOM can't be read. Definition of done:
 both backends (chromium both; camoufox shadow-login pass + canvas skip-with-reason).
 Extensive camoufox debugging logged a backend event-dispatch quirk (coordinate
 click_at does not fire a standalone over-canvas handler; JS navigation ignored) —
-orthogonal to visual perception, which shadow-login proves on camoufox. Running
-full regression on both backends, then live bambulab.
+orthogonal to visual perception, which shadow-login proves on camoufox.
 
-**Live-attempt log (this effort):** _(none yet)_
+**OTP stale-field + visual OTP entry (2026-11-22):** the one-time-code path now
+re-resolves the code field by stable attributes before typing (never the stale
+handle) and can enter a closed-shadow code field by coordinate. Two lab repros —
+`verify-rerender` (remounted code input) and `verify-shadow` (closed-shadow code
+field, entered visually) — pass on **both backends**. Full agent-primary e2e
+re-run green on both backends against the final code (chromium ok 338s; camoufox
+ok 310s; build/vet/lint + 22 unit packages green). `agentbrowser auth` prints a
+one-line run summary; the §5 live command restores the saved session on any exit.
+
+**Live-attempt log (this effort):** _(none — live step still blocked by the
+auto-mode classifier; operator-run only, command in docs/eval/agent-only.md §5)_
 
 ---
 

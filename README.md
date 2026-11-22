@@ -100,6 +100,7 @@ Everything is flags and environment variables; there is no config file.
 | `AGENTBROWSER_CHROME` | Path to a specific Chrome or Chromium binary. |
 | `AGENTBROWSER_LLM` | Model provider: `mock` (default), `openai`, `anthropic`, `gemini`. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Turn on a real model (with its matching `_MODEL` and optional `_BASE_URL`). |
+| `AGENTBROWSER_LLM_VISION` | `1`/`0` to force the model's **vision** capability on/off (default: on for `openai`/`anthropic`/`gemini`). Vision enables **visual mode** — the agent escalates to a screenshot + set-of-marks when the DOM can't be read (closed shadow root, canvas, cross-origin iframe), and acts by mark number or coordinate. |
 | `AGENTBROWSER_SOLVER_PLUGIN` | Path to an external CAPTCHA solver plugin. |
 | `AGENTBROWSER_CAPTCHA_CONFIG` | Path to a YAML file that sets the solver chain. |
 

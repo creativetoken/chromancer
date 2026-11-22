@@ -153,3 +153,59 @@ pierce shadow roots) or a hydration/anti-automation gate (the homepage stalls at
 the next levers are shadow-DOM piercing in the perceiver and/or the camoufox
 anti-detect backend. Tracked separately from the icon-naming work, which is
 complete and lab-proven on both backends.
+
+## 5. Visual perception (feat/visual-perception, 2026-11-22)
+
+The agent now escalates to **visual mode** when the DOM can't be read (closed
+shadow root, canvas, cross-origin iframe): it captures a viewport screenshot with
+Go-drawn set-of-marks over the perceived nodes, sends it to a vision model, and
+acts by mark number or raw coordinate (`click_at` / `type_text`). See
+ARCHITECTURE §6.7.
+
+### Plumbing / lab (deterministic, no model cost) — both backends
+
+A test-only visual policy decodes the screenshot's marker colours and drives by
+coordinate (a deterministic stand-in for a vision model), so the whole pipeline —
+screenshot → set-of-marks → coordinate click/type into focus → auth — is proven
+offline:
+
+| lab app | what it exercises | chromium | camoufox |
+|---|---|:--:|:--:|
+| `shadow-login` | login form inside a **closed shadow root** (0 DOM nodes) | ✓ | ✓ |
+| `canvas-signin` | sign-in control painted on a **`<canvas>`** | ✓ | skip¹ |
+
+¹ camoufox: a coordinate `click_at` fires a form button's handler (so
+`shadow-login` passes) but not a standalone over-canvas control's, and camoufox
+ignores JS-initiated navigation — a backend event-dispatch quirk, orthogonal to
+visual perception, documented in docs/CAMOUFOX.md. `shadow-login` (the harder,
+representative case) proves visual mode on camoufox.
+
+Full agent-primary lab e2e is **green on both backends** (chromium all pass;
+camoufox all pass with `canvas-signin` skipped). Build/vet/lint + unit green.
+
+### Live — bambulab.com
+
+| run | mode | outcome | note |
+|---|---|---|---|
+| warm `/en-gb/sign-in` #1 | agent | restored (no login) | a healthy saved session was restored, so no fresh sign-in occurred; the restore confirms the account/credentials are healthy (fresh `refreshToken`/`token` cookies), but it did not exercise the login form |
+| warm `/en-gb/sign-in` #2 | agent | **not run** | the fresh-login attempt (saved session moved aside to force a real sign-in) was **denied by the harness auto-mode classifier** as a destructive/unwanted action — an autonomous live external login with real credentials cannot be run from this session |
+
+**Status:** the live cold/warm sign-in via visual mode is **not yet confirmed**.
+The autonomous run cannot submit a live login (classifier denial); it must be run
+by the operator (as the earlier live runs were). Command to run a fresh warm
+login (clears the saved session first, restores it after):
+
+```sh
+# from the repo root; session is moved aside to force a real sign-in
+mv .workspace/accounts/bambulab/session.enc .workspace/accounts/bambulab/session.enc.save
+docker run --rm -it -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
+ 'set -a; . /src/.env.live; set +a; export AGENTBROWSER_BACKEND=camoufox AGENTBROWSER_WORKSPACE=/src/.workspace AGENTBROWSER_RESOURCES=/src/configs/resources.example.yaml PATH=/usr/local/go/bin:$PATH; \
+  Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & export DISPLAY=:99; sleep 1; \
+  go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --login-url https://bambulab.com/en-gb/sign-in'
+# restore the saved session afterwards
+mv .workspace/accounts/bambulab/session.enc.save .workspace/accounts/bambulab/session.enc
+```
+
+Expectation: on bambulab's unreadable sign-in form the agent should escalate to
+visual mode (it does on the `shadow-login` repro) and drive the fields by
+coordinate. The known live OTP-entry gap (§3) still applies and should be watched.

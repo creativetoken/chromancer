@@ -1,4 +1,4 @@
-Status: in progress — visual perception
+Status: in progress — visual perception (feature complete + lab-green on both backends; live bambulab sign-in blocked by the session's auto-mode classifier — needs the operator to run it; PR ready to open)
 
 ## Visual perception for the agent (feat/visual-perception, 2026-11-22)
 
@@ -29,10 +29,13 @@ numbers or coordinates when the DOM can't be read. Definition of done:
 - [x] 8. Lab apps: shadow-login (closed shadow root) passes visual on **chromium
       AND camoufox**; canvas-signin passes on **chromium**, skipped on camoufox
       (documented click_at/JS-nav quirk, docs/CAMOUFOX.md). (9c43715)
-- [ ] 9. Live: warm then cold bambulab (≤3/hr, ≥20min apart; 2h on throttle);
-      record in docs/eval/agent-only.md; restore session each run.
-- [x] 10. ARCHITECTURE §6.7 + README vision config done (1562824); PR + Status:
-      complete pending live step.
+- [~] 9. Live bambulab: warm attempt #1 only **restored** a healthy session (no
+      fresh sign-in); the fresh-login attempt was **denied by the harness
+      auto-mode classifier** (autonomous live external login). Session restored.
+      Recorded in docs/eval/agent-only.md §5 with the exact command for the
+      operator to run. **Blocked — needs operator.**
+- [x] 10. ARCHITECTURE §6.7 + README vision config + CAMOUFOX + eval §5 done. PR
+      ready to open (feat/visual-perception → main).
 
 **Status note (2026-11-22):** full visual pipeline built. Visual-apps e2e green on
 both backends (chromium both; camoufox shadow-login pass + canvas skip-with-reason).

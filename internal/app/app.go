@@ -177,6 +177,18 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	if a.AuthDriver == auth.AuthDriverAgent && agentModel == nil {
 		return AuthResult{Err: fmt.Errorf("auth driver 'agent' needs an LLM provider; none configured (set a model API key)"), Reason: "flow_failed"}
 	}
+	// Visual-mode model: a vision-capable provider so the agent can escalate to a
+	// screenshot + set-of-marks when the DOM can't be read (closed shadow root,
+	// canvas, cross-origin iframe). Prefer the router's vision task; fall back to
+	// the agent model only if it reports Vision. Nil → visual escalation is off.
+	var visionModel explore.LLMModel
+	if a.AuthDriver == auth.AuthDriverAgent && authRouter != nil {
+		if vp := authRouter.For(model.TaskVision); vp != nil && vp.Capabilities().Vision {
+			visionModel = vp
+		} else if am, ok := agentModel.(model.LLMProvider); ok && am.Capabilities().Vision {
+			visionModel = agentModel
+		}
+	}
 	if a.Recovery == auth.RecoveryOff {
 		handoff = nil
 	}
@@ -213,19 +225,20 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,
 		Perceiver: perceive.New(), Router: authRouter,
-		Sessions:   &auth.FileSessionStore{Path: ws.SessionEnc, Key: a.Key},
-		Writer:     &handback.FileWriter{Dir: ws.Artefacts, Account: account},
-		Audit:      al,
-		Budget:     bud,
-		Verifier:   a.verifier(account, creds, asker),
-		Captcha:    resolver,
-		Handoff:    handoff,
-		Agent:      agentModel,
-		Recovery:   a.Recovery,
-		AuthDriver: a.AuthDriver,
-		Capture:    handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
-		EntryCache: ws.CacheDir,
-		Timeout:    8 * time.Second,
+		Sessions:    &auth.FileSessionStore{Path: ws.SessionEnc, Key: a.Key},
+		Writer:      &handback.FileWriter{Dir: ws.Artefacts, Account: account},
+		Audit:       al,
+		Budget:      bud,
+		Verifier:    a.verifier(account, creds, asker),
+		Captcha:     resolver,
+		Handoff:     handoff,
+		Agent:       agentModel,
+		VisionAgent: visionModel,
+		Recovery:    a.Recovery,
+		AuthDriver:  a.AuthDriver,
+		Capture:     handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
+		EntryCache:  ws.CacheDir,
+		Timeout:     8 * time.Second,
 	}
 	if rr, ok := asker.(RecoveryReporter); ok && rr != nil {
 		authr.OnRecovering = rr.Recovering

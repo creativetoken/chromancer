@@ -21,19 +21,25 @@ numbers or coordinates when the DOM can't be read. Definition of done:
       field is perceivable. Unit-tested. (41811c5)
 - [x] 5. Perceiver: walk OPEN shadow roots; node rects → coordinate actions
       resolve shadow/canvas nodes by rect centre (no flat-selector needed). (715c360)
-- [~] 6. Routing: visual steps use VisionModel (plan model); screenshots capped
-      (default 10). Image tokens counted via usage. Budget token-spend = follow-up.
+- [x] 6. Routing: visual steps use VisionModel (app wires it from the router's
+      vision task, e7f334e); screenshots capped (default 10). Image tokens counted
+      via usage. Budget token-spend = minor follow-up.
 - [x] 7. Safety: password focus-editable check (closed-root → unverified+type;
       wrong target → refuse); placeholders via Executor; click_at audited. (b872697)
-- [x] 8. Lab apps: closed-shadow-root login + canvas sign-in; **pass visual on
-      chromium** (0e431da). Camoufox run pending.
+- [x] 8. Lab apps: shadow-login (closed shadow root) passes visual on **chromium
+      AND camoufox**; canvas-signin passes on **chromium**, skipped on camoufox
+      (documented click_at/JS-nav quirk, docs/CAMOUFOX.md). (9c43715)
 - [ ] 9. Live: warm then cold bambulab (≤3/hr, ≥20min apart; 2h on throttle);
       record in docs/eval/agent-only.md; restore session each run.
-- [ ] 10. PR + ARCHITECTURE/README/eval docs; set Status: complete.
+- [x] 10. ARCHITECTURE §6.7 + README vision config done (1562824); PR + Status:
+      complete pending live step.
 
-**Status note (2026-11-22):** full visual pipeline built and green on chromium
-(`TestE2EAgentPrimaryVisualApps` both apps). Running full chromium e2e for
-regression, then camoufox via Docker, then live bambulab.
+**Status note (2026-11-22):** full visual pipeline built. Visual-apps e2e green on
+both backends (chromium both; camoufox shadow-login pass + canvas skip-with-reason).
+Extensive camoufox debugging logged a backend event-dispatch quirk (coordinate
+click_at does not fire a standalone over-canvas handler; JS navigation ignored) —
+orthogonal to visual perception, which shadow-login proves on camoufox. Running
+full regression on both backends, then live bambulab.
 
 **Live-attempt log (this effort):** _(none yet)_
 

@@ -191,6 +191,7 @@ camoufox all pass with `canvas-signin` skipped). Build/vet/lint + unit green.
 | warm `/en-gb/sign-in` #2 | agent | **not run** | the fresh-login attempt (saved session moved aside to force a real sign-in) was **denied by the harness auto-mode classifier** as a destructive/unwanted action — an autonomous live external login with real credentials cannot be run from this session |
 | fresh `/en-gb/sign-in` #3 (operator) | agent | **failed: handoff_timeout** | `screenshots=0`, `mode=text`, `stop=plateau`, 10 steps / 44k tokens. The agent called `fill_login_form` on step 1, got "no login form (password field)" (the sign-in form is unreadable in the DOM), and then **never escalated to visual mode** — it spiralled clicking the header icon and timed out at a human handoff. **Root cause + fix below.** |
 | fresh `/en-gb/sign-in` #4 (operator) | agent | **failed: handoff_timeout (OTP entry)** | Much further this time: cookies dismissed, `fill_login_form → filled_login`, submit, then the **email-OTP step** appeared and the code **was fetched** (4× "email sent to …") — but `enter_verification` failed 4× with a "field clear" error. `screenshots=0` (the form was readable, so no escalation needed). **Root cause + fix below.** |
+| fresh `/en-gb/sign-in` #5 (operator) | agent | **failed: handoff_timeout (OTP entry, "timed out")** | Same shape as #4 but the OTP error became "timed out" (3 attempts). The first OTP fix left the `Type` step bounded only by the whole ~20s verify budget, so a guarded field blocked there before the fallback ran. Fixed: each `TypeInto` step is now capped at ~3s (rodbackend parity) and the fallback uses the native value setter (React-safe). |
 
 **Live-run #3 finding (fixed):** the failed step-1 `fill_login_form` set
 `loginAttempted=true`, which the post-login guard in `wantVisual` used to suppress
@@ -211,9 +212,22 @@ the value directly with input/change events). Fix: `cfPage.TypeInto` now mirrors
 that fallback. Lab repro `combined-verify-keyguard` (code field blocks all real key
 events) fails on the old camoufox typing and passes on the new — green on both
 backends. The handoff noVNC link also now opens from the host (the script
-publishes the in-container port). **Re-run live to confirm OTP entry now lands.**
-Note: run #4 burned 4 OTP codes on the failed attempts, so expect a possible
-verification throttle on the next live run.
+publishes the in-container port).
+
+**Live-run #5 finding (fixed):** the #4 fix recovered the clear-error but left the
+`Type` step bounded only by the whole verify budget, so a guarded field made it
+block (~20s) before the fallback ran — "type timed out". Fixed: every `TypeInto`
+step (focus/clear/type/eval/click/set) is capped at ~3s, so the fallback always
+gets to run; and the fallback now uses the element's **native value setter** so a
+React/Vue-controlled input registers the code (a plain `el.value=v` is reverted by
+such frameworks). `combined-verify-keyguard` green on camoufox.
+
+**Important before the next live run:** runs #4 + #5 burned **7 OTP codes**.
+bambulab likely throttles verification after that, which would make the next run
+time out at code-fetch regardless of the fix — so **wait ≥2 h** before re-running
+(the live-testing rule), and on the re-run **open the noVNC link** at any handoff
+to see the OTP screen directly (code entered vs a "too many attempts" throttle).
+**Re-run live (after the wait) to confirm OTP entry now lands.**
 
 **Status:** the live cold/warm sign-in via visual mode is **not yet confirmed**.
 The autonomous run cannot submit a live login (classifier denial); it must be run

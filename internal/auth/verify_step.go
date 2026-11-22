@@ -17,6 +17,11 @@ var (
 	emailTextRe = regexp.MustCompile(`(?i)(email|inbox|e-?mail)`)
 	hintMaskRe  = regexp.MustCompile(`(?i)(sent|emailed|texted)[^.]{0,60}?([*•x\x{2022}]{2,}[\dx*]{0,4}|\b[\w.+-]+@[\w-]+\.\w+|\+?\d[\d\s().-]{5,})`)
 	resendRe    = regexp.MustCompile(`(?i)(resend|send again|didn'?t (get|receive)|new code)`)
+	// sendCodeRe matches a control that TRIGGERS delivery of the code (clicked
+	// before the code is emailed/texted), e.g. bambulab's "Send code" button inside
+	// the verification field. Distinct from resend (which asks for a fresh code
+	// after one was already sent) and from the submit/confirm button.
+	sendCodeRe = regexp.MustCompile(`(?i)\b(send|get|request|email|text)( me)?( the| a)?( verification| login| sms| otp)? code\b|\bsend (otp|code)\b|\bget code\b`)
 	// confirmSubmitRe matches a verification submit button label. Anchored words
 	// so it does not fire on "Log in" / "Register" / "Forgot password".
 	confirmSubmitRe = regexp.MustCompile(`(?i)\b(confirm|verify|continue|submit|next|done)\b`)
@@ -31,6 +36,7 @@ type VerifyStep struct {
 	Submit    *perceive.Node
 	LinkOnly  bool // page expects us to open a link, no code field
 	Resend    *perceive.Node
+	SendCode  *perceive.Node // click to TRIGGER code delivery before fetching (e.g. "Send code")
 
 	// Visual entry: the code field is not perceivable (closed shadow root), so the
 	// code is typed by coordinate — focus VisualX,VisualY (viewport CSS px) then
@@ -55,7 +61,7 @@ func DetectVerifyStep(st perceive.State) VerifyStep {
 	if f.Password != nil && f.Password.Handle > credPos {
 		credPos = f.Password.Handle
 	}
-	var codeField, submit, resend, confirm *perceive.Node
+	var codeField, submit, resend, confirm, sendCode *perceive.Node
 	bestScore := 0
 	for i := range st.Nodes {
 		n := &st.Nodes[i]
@@ -73,12 +79,18 @@ func DetectVerifyStep(st perceive.State) VerifyStep {
 		if label == "" {
 			label = n.Text
 		}
+		// A "Send code" / "Get code" trigger (often a button/span inside the code
+		// field) that must be clicked to dispatch the code before it can be fetched.
+		if n.Tag != "input" && sendCode == nil && sendCodeRe.MatchString(label) {
+			sendCode = n
+		}
 		if n.Tag == "button" || n.Role == "button" || n.Tag == "a" {
 			if resendRe.MatchString(label) {
 				resend = n
-			} else if confirm == nil && confirmSubmitRe.MatchString(label) {
+			} else if confirm == nil && confirmSubmitRe.MatchString(label) && !sendCodeRe.MatchString(label) {
 				// A verify/confirm/continue-style submit, preferred over a generic
-				// "Log in" when a code field is revealed in the same form.
+				// "Log in" when a code field is revealed in the same form. A send-code
+				// trigger is never the submit.
 				confirm = n
 			}
 		}
@@ -91,7 +103,7 @@ func DetectVerifyStep(st perceive.State) VerifyStep {
 		submit = confirm
 	}
 
-	step := VerifyStep{CodeField: codeField, Submit: submit, Resend: resend}
+	step := VerifyStep{CodeField: codeField, Submit: submit, Resend: resend, SendCode: sendCode}
 	hasCodeCopy := codeTextRe.MatchString(text)
 	hasLinkCopy := magicLinkRe.MatchString(text)
 	// A code field distinct from the identifier and password inputs. Some sites

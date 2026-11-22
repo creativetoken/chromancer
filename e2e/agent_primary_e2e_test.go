@@ -127,6 +127,10 @@ func TestE2EAgentPrimaryVerifierApps(t *testing.T) {
 		// verify-value + direct value-set fallback (camoufox TypeInto parity — the
 		// bambulab OTP failure mode).
 		{"combined-verify-keyguard", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code is dispatched only after an UNPERCEIVABLE React-style "Send code"
+		// span is clicked (bambulab's verification modal): the verify flow must
+		// trigger delivery itself before the code can be fetched.
+		{"verify-sendcode", lab.DefaultUser, lab.DefaultPass, ""},
 	}
 	for _, c := range cases {
 		c := c

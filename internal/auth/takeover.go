@@ -386,13 +386,39 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Pa
 // be inspected offline. Best-effort: it never affects the flow.
 func (a *Authenticator) saveOTPDebug(ctx context.Context, p browser.Page, note string) {
 	st := mustPerceive(ctx, a, p)
-	var fields []string
+	var fields, clickables []string
 	for i := range st.Nodes {
 		n := &st.Nodes[i]
-		if n.Tag == "input" && n.Visible {
+		if !n.Visible {
+			continue
+		}
+		if n.Tag == "input" {
 			fields = append(fields, fmt.Sprintf("{type=%q mode=%q max=%d id=%q name=%q ac=%q val=%q}",
 				n.Type, n.InputMode, n.MaxLength, n.ID, n.NameAttr, n.Autocomplete, n.Value))
+		} else if n.Tag == "button" || n.Tag == "a" || n.Role == "button" {
+			lbl := n.Name
+			if lbl == "" {
+				lbl = n.Text
+			}
+			clickables = append(clickables, fmt.Sprintf("{%s %q}", n.Tag, lbl))
 		}
+	}
+	// Raw-DOM probe: does a send-code trigger exist AT ALL (even if the perceiver
+	// can't see it)? Reports its tag + whether it would be perceivable.
+	sendProbe := ""
+	if v, err := p.Eval(ctx, `() => {
+		const re = /\b(send|get|request|resend)\b[\s\S]{0,16}?\bcode\b/i;
+		for (const el of document.querySelectorAll('*')) {
+			if (el.children && el.children.length > 2) continue;
+			const t = (el.innerText || el.textContent || '').trim();
+			if (!t || t.length > 28 || !re.test(t)) continue;
+			const tag = el.tagName.toLowerCase();
+			const perceivable = tag === 'button' || tag === 'a' || el.getAttribute('role') === 'button' || el.hasAttribute('onclick');
+			return tag + ' text=' + JSON.stringify(t) + ' perceivable=' + perceivable;
+		}
+		return 'none';
+	}`); err == nil {
+		sendProbe = v.Str()
 	}
 	shotPath := ""
 	ws := os.Getenv("AGENTBROWSER_WORKSPACE")
@@ -406,8 +432,10 @@ func (a *Authenticator) saveOTPDebug(ctx context.Context, p browser.Page, note s
 			}
 		}
 	}
-	a.trace.Add("otp-debug (%s): url=%s inputs=%s screenshot=%s", note, st.URL, strings.Join(fields, " "), shotPath)
-	a.log("otp_debug", map[string]any{"note": note, "url": st.URL, "inputs": fields, "screenshot": shotPath})
+	a.trace.Add("otp-debug (%s): url=%s inputs=%s clickables=%s send_code_probe=[%s] screenshot=%s",
+		note, st.URL, strings.Join(fields, " "), strings.Join(clickables, " "), sendProbe, shotPath)
+	a.log("otp_debug", map[string]any{"note": note, "url": st.URL, "inputs": fields,
+		"clickables": clickables, "send_code_probe": sendProbe, "screenshot": shotPath})
 }
 
 // agentVerifyBudget is the verification window the agent gets for entering a

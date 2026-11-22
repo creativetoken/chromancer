@@ -570,6 +570,30 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 	}
 	a.trace.Verification = append(a.trace.Verification, fmt.Sprintf("%s (%s)", vs.Channel, vs.Hint))
 	a.log("verification", map[string]any{"channel": string(vs.Channel), "hint": vs.Hint, "link_only": vs.LinkOnly})
+	// Some sites don't dispatch the code until a "Send code" trigger is clicked
+	// (e.g. bambulab's verification modal has a "Send code" button inside the field,
+	// and the code field stays empty until it is pressed). Click it BEFORE fetching
+	// so a code is actually sent, advancing the freshness window to the click so
+	// GetCode waits for the code this click produced. The trigger is often a React
+	// <span onClick> with no onclick attribute/role, so it is invisible to the DOM
+	// perceiver — hence the JS fallback that finds it by text and clicks it directly.
+	if !vs.LinkOnly {
+		before := time.Now()
+		clicked := ""
+		if vs.SendCode != nil {
+			if err := (actor{deps}).click(ctx, vs.SendCode, "send-code"); err == nil {
+				clicked = firstNonEmptyStr(vs.SendCode.Name, vs.SendCode.Text, "send-code")
+			}
+		}
+		if clicked == "" {
+			clicked = clickSendCodeJS(ctx, p)
+		}
+		if clicked != "" {
+			*since = before
+			a.trace.Add("verification: triggered code delivery (%q)", clicked)
+			_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+		}
+	}
 	vctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: deadline})
@@ -662,6 +686,35 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 func mustPerceive(ctx context.Context, a *Authenticator, p browser.Page) perceive.State {
 	st, _, _ := a.Perceiver.Perceive(ctx, p)
 	return st
+}
+
+// clickSendCodeJS finds a "Send code" / "Get code" / "Resend code" trigger by its
+// visible text and clicks it directly in the page, bypassing the DOM perceiver
+// (such triggers are often React <span onClick> elements with no onclick
+// attribute/role, so the structured perceiver cannot see them). It only clicks a
+// small, visible, leaf-ish element whose text is a send-code phrase, and returns
+// the clicked text (or "" if none). Best-effort; never affects the flow on error.
+func clickSendCodeJS(ctx context.Context, p browser.Page) string {
+	v, err := p.Eval(ctx, `() => {
+		const re = /\b(send|get|request|resend)\b[\s\S]{0,16}?\bcode\b/i;
+		const els = Array.from(document.querySelectorAll('button, a, [role="button"], span, div, li, p'));
+		for (const el of els) {
+			if (el.children && el.children.length > 2) continue;
+			const t = (el.innerText || el.textContent || '').trim();
+			if (!t || t.length > 28 || !re.test(t)) continue;
+			const r = el.getBoundingClientRect();
+			if (r.width <= 0 || r.height <= 0) continue;
+			const cs = getComputedStyle(el);
+			if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+			el.click();
+			return t;
+		}
+		return '';
+	}`)
+	if err != nil {
+		return ""
+	}
+	return v.Str()
 }
 
 // gotoLogin navigates to the login entrypoint (used when switching from signup).

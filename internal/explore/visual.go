@@ -49,8 +49,17 @@ func (e *Explorer) wantVisual(st perceive.State) bool {
 	if e.visualActive {
 		return true // stay visual until a form appears or budget runs out
 	}
-	needsVision := e.Perceiver != nil && e.Perceiver.NeedsVision(st)
-	if needsVision || e.noProgressStreak >= 2 || noSignInAffordance(st) {
+	// NeedsVision (no interactive nodes, or a canvas-only UI) is an unambiguous
+	// signal the page cannot be read as text — escalate regardless of phase.
+	if e.Perceiver != nil && e.Perceiver.NeedsVision(st) {
+		e.visualActive = true
+		return true
+	}
+	// The stall / no-affordance triggers are for the FORM-FINDING phase only. Once
+	// a login form has been filled, interstitials (trust/terms) and verification
+	// pages legitimately have no sign-in affordance and may not change state every
+	// step — those belong to the text path, not visual mode.
+	if !e.loginAttempted && (e.noProgressStreak >= 2 || noSignInAffordance(st)) {
 		e.visualActive = true
 		return true
 	}
@@ -101,6 +110,19 @@ func noSignInAffordance(st perceive.State) bool {
 		}
 	}
 	return true
+}
+
+// actAttemptsLogin reports whether an action is part of entering credentials —
+// used to mark the end of the form-finding phase (after which visual escalation
+// on stall/no-affordance is suppressed).
+func actAttemptsLogin(a llmAction) bool {
+	switch a.Action {
+	case "fill_login_form", "fill_signup_form":
+		return true
+	case "type", "type_text":
+		return strings.Contains(a.Text, "password")
+	}
+	return false
 }
 
 // isNoProgress reports whether an action's outcome means the agent is stuck, so

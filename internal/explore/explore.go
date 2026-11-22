@@ -149,6 +149,7 @@ type Explorer struct {
 	visualActive     bool // currently escalated to screenshot-driven perception
 	screenshotsUsed  int  // screenshots taken this run (capped by MaxScreenshots)
 	noProgressStreak int  // consecutive steps that produced no visible change
+	loginAttempted   bool // the agent has filled/typed a login form at least once
 }
 
 // takeoverMode reports whether any agent-takeover tool is wired, enabling the

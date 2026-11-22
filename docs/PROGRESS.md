@@ -1,4 +1,41 @@
-Status: in progress — agent default
+Status: complete
+
+## Summary — agent-default push (2026-11-21)
+
+**Done (all on branches; see below).** The agent driver is the CLI default;
+deterministic is deprecated-but-selectable. Live bambulab validation drove three
+real bug fixes (success-detector false positive, verification claim lockout,
+guarded one-time-code typing) and the icon-only sign-in perceiver work, each with
+lab repros + tests. Full unit suite, vet/lint, and agent-primary lab e2e pass;
+`icon-signin` passes on chromium **and** camoufox.
+
+**Merge status (2026-11-22).** `feat/agent-only` is **MERGED to main** (operator
+approved; build/vet/unit green at merge, merge commit `fcdaccd`). The live
+bambulab gate was waived by the operator — note the live caveat stands: the OTP
+step still times out entering the code into bambulab's live field (element/type
+stage); live validation was stopped by a verification rate limit (4/5 attempts).
+
+**Open branches / PRs:**
+- `feat/agent-only` → main (step 3): default flip + 3 bug fixes + docs. **MERGED
+  (`fcdaccd`).**
+- `feat/icon-signin` → main (step 4): perceiver naming + icon-signin lab (both
+  backends) + prompt rule. Rebased onto current main (merge `b404cfa`), pushed,
+  build/vet/unit green. **Open — ready to merge.**
+  Compare: https://github.com/creativetoken/chromancer/compare/main...feat/icon-signin?expand=1
+
+**Open follow-ups (not done, recorded):**
+1. Live OTP entry into bambulab's code field times out at the element/type stage
+   — needs executor/perceiver work on that specific field (stage diagnostics +
+   20s budget added; couldn't be exercised past the rate limit).
+2. bambulab's account/sign-in header control is absent from the queried DOM for
+   the automated browser (shadow DOM or anti-automation hydration) — the icon
+   naming cannot help an element that is not there. Next levers: shadow-DOM
+   piercing in the perceiver and/or screenshot + set-of-marks vision escalation
+   (deferred, DECISIONS.md), and/or the camoufox anti-detect backend.
+3. Deterministic-orchestration deletion (prior plan) remains staged below.
+
+**Live results:** docs/eval/agent-only.md §3–4 (per-attempt funnels, stages,
+rate-limit, icon-finding). Session restored after every live run.
 
 ## Live validation + agent-default push (2026-11-21)
 Working through the agent-default plan (see DECISIONS.md for choices):
@@ -22,9 +59,18 @@ Working through the agent-default plan (see DECISIONS.md for choices):
   env (SSH remote); branch pushed. PR title/body ready at scratchpad/PR_BODY.md;
   open via: https://github.com/creativetoken/chromancer/compare/main...feat/agent-only?expand=1
   Proceeding to step 4 on branch feat/icon-signin.
-- [ ] Step 4: icon-only sign-in controls (feat/icon-signin) — new branch off
-  feat/agent-only. Includes the live OTP-entry element/type-stage diagnosis as a
-  follow-up (the field resists rod element ops; needs perceiver/executor work).
+- [~] Step 4: icon-only sign-in controls (branch feat/icon-signin off
+  feat/agent-only). Done: perceiver names unlabeled header controls (svg/alt/
+  title/data-testid/class/href hints, else "icon (unlabeled)" + position);
+  observation shows pos=; lab app `icon-signin` (account icon → dropdown → form);
+  lab policy follows an icon opener; prompt tells the agent to open header icons
+  before request_human. `TestE2EAgentPrimaryIconSignin` passes on chromium
+  (camoufox in progress). Set-of-marks vision escalation deferred (DECISIONS.md —
+  text naming already resolves the repro). Remaining: camoufox e2e confirm; one
+  cold bambulab run (icon-finding) honoring the rate-limit rule.
+  NOTE: the live OTP-entry element/type-stage gap (step 2) is a separate
+  follow-up (the field resists rod element ops; needs executor work) — not fixed
+  on this branch.
 - [ ] Step 5: finalize docs + PROGRESS "Status: complete".
 
 # Agent-only refactor (remove deterministic drivers; an LLM agent decides every step)

@@ -37,6 +37,7 @@ type Node struct {
 	Disabled     bool   `json:"disabled,omitempty"`
 	Visible      bool   `json:"visible"`
 	Text         string `json:"text,omitempty"` // for buttons/links: visible text
+	Pos          string `json:"pos,omitempty"`  // position hint for unlabeled controls, e.g. "top-right header"
 }
 
 // State is the perceived page.
@@ -252,8 +253,43 @@ const walkJS = `(base, frameIndex) => {
       return el.getAttribute('title') || el.name || '';
     }
     const t = txt(el); if (t) return t.slice(0, 120);
-    const img = el.querySelector('img[alt]'); if (img) return img.getAttribute('alt');
-    return el.getAttribute('title') || el.getAttribute('value') || '';
+    const img = el.querySelector('img[alt]'); if (img && img.getAttribute('alt')) return img.getAttribute('alt');
+    const st = el.querySelector('svg title, svg [id] title, title'); if (st && txt(st)) return txt(st).slice(0, 120);
+    const title = el.getAttribute('title'); if (title) return title;
+    const v = el.getAttribute('value'); if (v) return v;
+    return hintName(el);
+  };
+  // hintName derives a name for an otherwise-unlabeled control from its
+  // data-testid/class/id, or (for links) its href, when they clearly denote an
+  // account / sign-in control. This surfaces icon-only header buttons (avatars,
+  // account menus) the agent would otherwise not recognise as a sign-in entry.
+  const hintName = (el) => {
+    const cls = (el.className && el.className.baseVal != null) ? el.className.baseVal : (el.className || '');
+    const hay = [el.getAttribute('data-testid') || '', String(cls), el.id || '',
+                 el.tagName.toLowerCase() === 'a' ? (el.getAttribute('href') || '') : ''].join(' ').toLowerCase();
+    const map = [['sign-in', 'sign in'], ['signin', 'sign in'], ['sign_in', 'sign in'],
+                 ['log-in', 'log in'], ['login', 'log in'], ['log_in', 'log in'],
+                 ['account', 'account'], ['avatar', 'account'], ['my-account', 'account'],
+                 ['profile', 'account'], ['user-menu', 'account'], ['usermenu', 'account'], ['user', 'account']];
+    for (const [needle, label] of map) { if (hay.indexOf(needle) >= 0) return label + ' (icon)'; }
+    return '';
+  };
+  // posOf describes where a control sits, so an unlabeled one is still locatable
+  // ("top-right header"). Region (header/nav) first, then a 3x3 viewport cell.
+  const posOf = (el) => {
+    const r = el.getBoundingClientRect();
+    const vw = window.innerWidth || 1, vh = window.innerHeight || 1;
+    const vert = r.top < vh * 0.33 ? 'top' : (r.top > vh * 0.66 ? 'bottom' : 'middle');
+    const horiz = r.left < vw * 0.33 ? 'left' : (r.left > vw * 0.66 ? 'right' : 'center');
+    const region = el.closest('header, [role="banner"]') ? ' header'
+                 : (el.closest('nav, [role="navigation"]') ? ' nav' : '');
+    return vert + '-' + horiz + region;
+  };
+  const interactive = (el) => {
+    const tag = el.tagName.toLowerCase();
+    return tag === 'a' || tag === 'button' || el.getAttribute('role') === 'button'
+        || el.getAttribute('role') === 'link' || el.getAttribute('role') === 'menuitem'
+        || el.hasAttribute('onclick');
   };
   const visible = (el) => {
     const cs = getComputedStyle(el);
@@ -270,11 +306,20 @@ const walkJS = `(base, frameIndex) => {
     const vis = visible(el);
     if (!vis && tag !== 'input') continue;
     el.setAttribute('data-ab-handle', String(h));
+    let nm = accName(el);
+    let pos = '';
+    if (!nm && interactive(el)) {
+      // An unlabeled interactive control (icon-only button/link): keep it, but
+      // name it so the agent can reason about and locate it.
+      pos = posOf(el);
+      nm = 'icon (unlabeled)';
+    }
     nodes.push({
       h: h, f: frameIndex, tag: tag,
       type: (el.getAttribute('type') || '').toLowerCase(),
       role: el.getAttribute('role') || '',
-      name: accName(el),
+      name: nm,
+      pos: pos,
       placeholder: el.placeholder || '',
       value: (tag === 'input' && (el.type === 'password')) ? (el.value ? '***' : '') : ((el.value || '') + '').slice(0, 80),
       href: tag === 'a' ? (el.getAttribute('href') || '') : '',

@@ -277,6 +277,7 @@ type observation struct {
 	agreeCheckbox    *element
 	resendCtl        *element
 	loginOpener      *element
+	iconOpener       *element // unlabeled account/avatar icon, used when no text opener exists
 	firstNavigable   *element
 }
 
@@ -284,22 +285,23 @@ var (
 	elemRe   = regexp.MustCompile(`(?m)^#(\d+)\s+(\S+)\s+"([^"]*)"(?:\s+\((.*)\))?\s*$`)
 	recentRe = regexp.MustCompile(`(?m)^\s+(\w+)\s+→\s+(.*)$`)
 
-	botWallRe   = regexp.MustCompile(`(?i)(verify (you(’|'|)re|you are) (a )?human|are you a (human|robot)|unusual traffic|automated (traffic|requests)|access denied|request blocked|you have been blocked|rate.?limit|too many requests|press (and hold|& hold)|complete the (security )?check|cloudflare)`)
-	captchaRe   = regexp.MustCompile(`(?i)(recaptcha|hcaptcha|turnstile|i'?m not a robot|captcha|select all (images|squares))`)
-	consentRe   = regexp.MustCompile(`(?i)(cookie|consent|we use cookies|privacy preferences)`)
-	acceptRe    = regexp.MustCompile(`(?i)(accept|agree|got it|allow all|reject|decline|only necessary|necessary only)`)
-	logoutRe    = regexp.MustCompile(`(?i)(log ?out|sign ?out)`)
-	codeAskRe   = regexp.MustCompile(`(?i)(verification code|enter the code|one-?time (code|password)|security code|we (emailed|sent|texted)|check your (email|phone|inbox)|authenticator|6-digit)`)
-	linkAskRe   = regexp.MustCompile(`(?i)(magic link|sign-?in link|click the link|we emailed you a link|open the link)`)
-	smsRe       = regexp.MustCompile(`(?i)(sms|text message|your phone|phone number|texted)`)
-	totpRe      = regexp.MustCompile(`(?i)(authenticator|authentication app|authentication code|totp|google authenticator|authy)`)
-	codeFieldRe = regexp.MustCompile(`(?i)(code|otp|one-?time|verification|passcode|2fa|mfa)`)
-	resendRe    = regexp.MustCompile(`(?i)(resend|send (a |another )?(new )?code|didn'?t (get|receive))`)
-	submitRe    = regexp.MustCompile(`(?i)^(log ?in|sign ?in|submit|continue|next|verify|confirm)$`)
-	primaryRe   = regexp.MustCompile(`(?i)^(continue.*|proceed.*|confirm.*|trust this device|got it|next|verify|yes.*|allow.*|i agree.*|accept.*)$`)
-	avoidRe     = regexp.MustCompile(`(?i)(delete|remove|close account|deactivate|cancel|log ?out|sign ?out)`)
-	openerRe    = regexp.MustCompile(`(?i)^(sign ?in|log ?in|login|enter|members?( area| portal)?|get started|my account|account)$`)
-	registerRe  = regexp.MustCompile(`(?i)(create account|create an account|sign ?up|register|join( now)?)`)
+	botWallRe    = regexp.MustCompile(`(?i)(verify (you(’|'|)re|you are) (a )?human|are you a (human|robot)|unusual traffic|automated (traffic|requests)|access denied|request blocked|you have been blocked|rate.?limit|too many requests|press (and hold|& hold)|complete the (security )?check|cloudflare)`)
+	captchaRe    = regexp.MustCompile(`(?i)(recaptcha|hcaptcha|turnstile|i'?m not a robot|captcha|select all (images|squares))`)
+	consentRe    = regexp.MustCompile(`(?i)(cookie|consent|we use cookies|privacy preferences)`)
+	acceptRe     = regexp.MustCompile(`(?i)(accept|agree|got it|allow all|reject|decline|only necessary|necessary only)`)
+	logoutRe     = regexp.MustCompile(`(?i)(log ?out|sign ?out)`)
+	codeAskRe    = regexp.MustCompile(`(?i)(verification code|enter the code|one-?time (code|password)|security code|we (emailed|sent|texted)|check your (email|phone|inbox)|authenticator|6-digit)`)
+	linkAskRe    = regexp.MustCompile(`(?i)(magic link|sign-?in link|click the link|we emailed you a link|open the link)`)
+	smsRe        = regexp.MustCompile(`(?i)(sms|text message|your phone|phone number|texted)`)
+	totpRe       = regexp.MustCompile(`(?i)(authenticator|authentication app|authentication code|totp|google authenticator|authy)`)
+	codeFieldRe  = regexp.MustCompile(`(?i)(code|otp|one-?time|verification|passcode|2fa|mfa)`)
+	resendRe     = regexp.MustCompile(`(?i)(resend|send (a |another )?(new )?code|didn'?t (get|receive))`)
+	submitRe     = regexp.MustCompile(`(?i)^(log ?in|sign ?in|submit|continue|next|verify|confirm)$`)
+	primaryRe    = regexp.MustCompile(`(?i)^(continue.*|proceed.*|confirm.*|trust this device|got it|next|verify|yes.*|allow.*|i agree.*|accept.*)$`)
+	avoidRe      = regexp.MustCompile(`(?i)(delete|remove|close account|deactivate|cancel|log ?out|sign ?out)`)
+	openerRe     = regexp.MustCompile(`(?i)^(sign ?in|log ?in|login|enter|members?( area| portal)?|get started|my account|account)$`)
+	iconOpenerRe = regexp.MustCompile(`(?i)(account \(icon\)|icon \(unlabeled\)|avatar|user[ -]?menu|profile \(icon\))`)
+	registerRe   = regexp.MustCompile(`(?i)(create account|create an account|sign ?up|register|join( now)?)`)
 	// credRejectRe matches a hard credentials rejection (wrong password / unknown
 	// account), as opposed to a transient "something went wrong, try again".
 	credRejectRe = regexp.MustCompile(`(?i)(incorrect|invalid|wrong|not ?recogni[sz]ed|bad)[^.]{0,24}(password|e-?mail|username|credential|login|account)|invalid credentials|(password|e-?mail|username)[^.]{0,24}(incorrect|invalid|wrong)`)
@@ -403,6 +405,9 @@ func parseObservation(obs string) observation {
 		if o.loginOpener == nil && (isButton(e) || e.kind == "a") && openerRe.MatchString(strings.TrimSpace(e.name)) && !avoidRe.MatchString(e.name) {
 			o.loginOpener = e
 		}
+		if o.iconOpener == nil && (isButton(e) || e.kind == "a") && iconOpenerRe.MatchString(e.name) {
+			o.iconOpener = e
+		}
 		if o.firstNavigable == nil && (isButton(e) || e.kind == "a") && !avoidRe.MatchString(e.name) {
 			o.firstNavigable = e
 		}
@@ -435,6 +440,11 @@ func parseObservation(obs string) observation {
 	o.submitButton = pickSubmit(o.submitCandidates)
 	if o.submitButton == nil {
 		o.submitButton = o.primaryButton
+	}
+	// When no text "sign in" control exists, an unlabeled account/avatar icon is
+	// the opener (icon-only header sign-in, as bambulab.com now does).
+	if o.loginOpener == nil {
+		o.loginOpener = o.iconOpener
 	}
 	return o
 }

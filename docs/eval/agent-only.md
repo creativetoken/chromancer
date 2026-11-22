@@ -131,3 +131,25 @@ element/type stage (stage-naming diagnostics added). The lab combined-verify
 (incl. the guarded variant) passes agent-only on both backends; the remaining
 gap is specific to bambulab's live code field. Steps/tokens/time will be
 recorded here once a live run completes the OTP step.
+
+## 4. Live validation — icon-only sign-in (feat/icon-signin)
+
+The perceiver now names unlabeled header controls and the prompt tells the agent
+to open header account/avatar icons before escalating. Lab app `icon-signin`
+(account icon → dropdown → form) passes agent-only on **chromium and camoufox**
+(`TestE2EAgentPrimaryIconSignin`).
+
+**Cold bambulab run (attempt 1/3):** the fix behaves correctly — the agent
+reasoned *"the sign-in entry is likely an unlabeled account icon in the top-right
+header"* and scrolled/waited to find it — but bambulab's account/sign-in control
+is **not present in the perceivable DOM** for the automated browser (only a logo
+and product links are listed). The agent escalated with `request_human` without
+guessing URLs. Not retried: the control's absence is deterministic, not flaky.
+
+**Follow-up (next blocker):** bambulab's header sign-in control is not in the
+queried DOM — likely shadow DOM (the perceiver's `querySelectorAll` does not
+pierce shadow roots) or a hydration/anti-automation gate (the homepage stalls at
+`readyState: interactive`). Naming cannot help an element that is not in the DOM;
+the next levers are shadow-DOM piercing in the perceiver and/or the camoufox
+anti-detect backend. Tracked separately from the icon-naming work, which is
+complete and lab-proven on both backends.

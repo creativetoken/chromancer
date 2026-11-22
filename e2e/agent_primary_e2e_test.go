@@ -172,6 +172,24 @@ func TestE2EAgentPrimarySimple(t *testing.T) {
 	assertPrimarySucceeded(t, res, policy, e.Password)
 }
 
+// TestE2EAgentPrimaryIconSignin drives a site whose only sign-in entry is an
+// unlabeled account icon in the top-right header (no visible sign-in text; the
+// sign-in link lives in a dropdown the icon opens). The agent must recognise the
+// icon-only control (perceiver names it + gives its position), open the menu,
+// follow the revealed sign-in link, and log in — rather than giving up because
+// no sign-in text is visible. Reproduces bambulab.com's current sign-in entry.
+func TestE2EAgentPrimaryIconSignin(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("icon-signin")
+	policy := lab.NewPolicyModel()
+	res, err := h.runAgentPrimary(t, "icon-signin", identity.Credentials{UsernameOrEmail: e.Username, Password: e.Password}, policy, nil)
+	if err != nil {
+		t.Fatalf("agent-primary icon-signin should succeed: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, e.Password)
+}
+
 func TestE2EAgentPrimaryTrustDevice(t *testing.T) {
 	skipUnlessE2E(t)
 	h := newHarness(t)

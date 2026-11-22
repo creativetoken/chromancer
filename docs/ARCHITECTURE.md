@@ -21,10 +21,16 @@ agent decides **every** step of authentication and crawl, and success is
 confirmed only by `check_logged_in` (deterministic cookie/XHR detection). The
 form-filling, verification, CAPTCHA and success-detection code is kept, but as
 **tools the agent calls**, not a driver that precedes it. A real model is
-required (there is no deterministic fallback); tests drive the loop with a
-deterministic, test-only "lab policy" model. Perception stays
-**accessibility-tree-first** with **screenshot + set-of-marks** as a vision
-escalation.
+required; tests drive the loop with a deterministic, test-only "lab policy"
+model. The CLI default is `--auth-driver agent`; the old deterministic driver is
+still selectable as `--auth-driver deterministic` but is **deprecated** (warns)
+and slated for removal. Perception stays **accessibility-tree-first**, and names
+unlabeled interactive controls (icon-only account/sign-in buttons) from
+svg/alt/title/data-testid/class/href, or as `icon (unlabeled)` with a position,
+so the agent can reach them. **Screenshot + set-of-marks** vision escalation is
+planned (not yet implemented); it is the next lever for sign-in controls that
+render visually but are absent from the queried DOM (shadow DOM / anti-automation
+hydration).
 
 > Historical note: v1 shipped deterministic-first (ADR 0004) — a code-first skill
 > layer with the LLM only for judgment. That is superseded; the brittle

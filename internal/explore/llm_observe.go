@@ -157,6 +157,9 @@ func elementLine(n perceive.Node) string {
 	if n.Disabled {
 		extra = append(extra, "disabled")
 	}
+	if n.Pos != "" {
+		extra = append(extra, "pos="+n.Pos)
+	}
 	name := n.Name
 	if name == "" {
 		name = n.Text

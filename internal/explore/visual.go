@@ -61,6 +61,16 @@ func (e *Explorer) wantVisual(st perceive.State) bool {
 	// text path owns (enter_verification, a trust/terms button) — NOT a hidden
 	// form. Escalating there would hijack the flow into a dead visual loop.
 	if e.loginAttempted {
+		// One post-login exception: the page clearly asks for a one-time code to
+		// TYPE, but no textual input is perceivable (the code field is in a closed
+		// shadow root / custom component). The text verification path has no handle
+		// to enter, so escalate — the code is then entered by coordinate. Magic-link
+		// "check your email for a link" copy is excluded so passwordless flows are
+		// untouched.
+		if asksForCodeNoField(st) {
+			e.visualActive = true
+			return true
+		}
 		return false
 	}
 	// Pre-login: no interactive nodes at all (a form hidden in a closed shadow
@@ -92,6 +102,40 @@ func hasPerceivableLoginForm(st perceive.State) bool {
 		}
 	}
 	return false
+}
+
+var (
+	// codeEntryRe matches copy that asks the user to TYPE a one-time code (not a
+	// link). Kept tight so it does not fire on generic account/security text.
+	codeEntryRe = regexp.MustCompile(`(?i)(enter (the|your|a|this|that)? ?(6.?digit |security |verification )?code|verification code|one.?time (code|password)|security code|passcode|type (the|your) code)`)
+	// linkCopyRe matches passwordless magic-link copy; its presence suppresses the
+	// code-entry escalation (there is no field to type into, a link arrives OOB).
+	linkCopyRe = regexp.MustCompile(`(?i)(magic link|click the (sign.?in |login )?link|sign.?in link|link to (sign|log) ?in|we (sent|emailed) you a link)`)
+)
+
+// asksForCodeNoField reports whether the page asks for a one-time code to type
+// but exposes NO perceivable textual input to type it into (the code field is in
+// a closed shadow root / custom component). It is the post-login visual-escalation
+// trigger for coordinate-based code entry. Magic-link copy is excluded so the
+// passwordless "check your email" path stays on the text/interstitial path.
+func asksForCodeNoField(st perceive.State) bool {
+	hay := strings.ToLower(st.Title + " " + strings.Join(st.Headings, " ") + " " + st.Text)
+	if linkCopyRe.MatchString(hay) {
+		return false
+	}
+	if !codeEntryRe.MatchString(hay) {
+		return false
+	}
+	for _, n := range st.Nodes {
+		if !n.Visible || n.Tag != "input" {
+			continue
+		}
+		switch n.Type {
+		case "", "text", "tel", "number":
+			return false // a code-capable field is perceivable; the text path owns it
+		}
+	}
+	return true
 }
 
 var signInWordRe = regexp.MustCompile(`(?i)(sign[ -]?in|log[ -]?in|sign[ -]?on)`)

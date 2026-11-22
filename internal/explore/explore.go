@@ -31,13 +31,14 @@ type Report struct {
 	StopReason     string         `json:"stop_reason"` // budget | plateau | frontier_empty | auth_lost | model_done | steps | loop
 	Pages          int            `json:"pages"`
 	// LLM/hybrid driver accounting.
-	Steps     int         `json:"steps,omitempty"`
-	InTokens  int         `json:"in_tokens,omitempty"`
-	OutTokens int         `json:"out_tokens,omitempty"`
-	CostUSD   float64     `json:"cost_usd,omitempty"`
-	Notes     []string    `json:"notes,omitempty"`
-	Flags     []string    `json:"flags,omitempty"` // foreign identity values etc.
-	Trace     []TraceStep `json:"-"`               // written to a file by the caller
+	Steps       int         `json:"steps,omitempty"`
+	Screenshots int         `json:"screenshots,omitempty"` // visual-mode screenshots taken
+	InTokens    int         `json:"in_tokens,omitempty"`
+	OutTokens   int         `json:"out_tokens,omitempty"`
+	CostUSD     float64     `json:"cost_usd,omitempty"`
+	Notes       []string    `json:"notes,omitempty"`
+	Flags       []string    `json:"flags,omitempty"` // foreign identity values etc.
+	Trace       []TraceStep `json:"-"`               // written to a file by the caller
 }
 
 // TraceStep is one LLM-driver step for the written step trace.

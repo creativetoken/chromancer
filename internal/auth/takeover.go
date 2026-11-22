@@ -505,7 +505,12 @@ func (a *Authenticator) recordAgentTrace(reason string, rep *explore.Report) {
 		return
 	}
 	a.trace.AgentTakeover = append(a.trace.AgentTakeover,
-		fmt.Sprintf("trigger=%s steps=%d stop=%s in_tokens=%d out_tokens=%d", reason, rep.Steps, rep.StopReason, rep.InTokens, rep.OutTokens))
+		fmt.Sprintf("trigger=%s steps=%d stop=%s screenshots=%d in_tokens=%d out_tokens=%d", reason, rep.Steps, rep.StopReason, rep.Screenshots, rep.InTokens, rep.OutTokens))
+	if rep.Screenshots > 0 {
+		a.trace.Screenshots += rep.Screenshots
+	}
+	a.trace.InTokens += rep.InTokens
+	a.trace.OutTokens += rep.OutTokens
 	for _, ts := range rep.Trace {
 		line := fmt.Sprintf("%d %s → %s", ts.N, ts.Action, ts.Outcome)
 		if ts.Why != "" {

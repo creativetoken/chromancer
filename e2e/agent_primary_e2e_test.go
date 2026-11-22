@@ -120,6 +120,9 @@ func TestE2EAgentPrimaryVerifierApps(t *testing.T) {
 		{"magic-link", lab.DefaultUser, "", ""}, // passwordless email link
 		{"totp", "", lab.DefaultPass, lab.TOTPSeed},
 		{"combined-verify", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code input is remounted after it is perceived (stale handle): the flow
+		// must re-resolve the field by stable attributes before typing.
+		{"verify-rerender", lab.DefaultUser, lab.DefaultPass, ""},
 	}
 	for _, c := range cases {
 		c := c
@@ -230,6 +233,44 @@ func TestE2EAgentPrimaryVisualApps(t *testing.T) {
 				t.Logf("note: no click_at/type_text in takeover trace for %s (trace: %+v)", app, res.Trace.AgentTakeover)
 			}
 		})
+	}
+}
+
+// TestE2EAgentPrimaryVerifyShadow drives a step-up code page whose code field is
+// inside a CLOSED shadow root: the text verification path can't see it, so the
+// agent must escalate to visual mode and enter the fetched code BY COORDINATE
+// (enter_verification with x,y → click to focus + type into focus). Proves visual
+// OTP entry on both backends (closed-shadow click_at + type works on camoufox, as
+// shadow-login does). The code value is never surfaced to the policy.
+func TestE2EAgentPrimaryVerifyShadow(t *testing.T) {
+	skipUnlessE2E(t)
+	h := newHarness(t)
+	e := h.expect("verify-shadow")
+	inbox := verify.NewLabInbox(h.ts.URL, func(string) string { return lab.DefaultUser })
+	inbox.Poll = 150 * time.Millisecond
+	policy := lab.NewPolicyModel()
+	creds := identity.Credentials{UsernameOrEmail: e.Username, Password: lab.DefaultPass}
+	res, err := h.runAgentPrimary(t, "verify-shadow", creds, policy, inbox)
+	if err != nil {
+		t.Fatalf("agent-primary verify-shadow should succeed via visual code entry: %v (trace %+v)", err, res.Trace)
+	}
+	assertPrimarySucceeded(t, res, policy, lab.DefaultPass)
+	if len(res.Trace.Verification) == 0 {
+		t.Errorf("verify-shadow: expected a verification step in the trace: %+v", res.Trace)
+	}
+	// The code must have been entered by coordinate (visual mode), not by handle:
+	// the enter_verification step is driven from the screenshot (its reason records
+	// the coordinate/visual path). A closed-shadow code field cannot be entered any
+	// other way, so this asserts the visual code path was exercised.
+	sawVisual := false
+	for _, line := range res.Trace.AgentTakeover {
+		if strings.Contains(line, "click_at") || strings.Contains(line, "type_text") ||
+			strings.Contains(line, "coordinate") || strings.Contains(line, "(visual)") {
+			sawVisual = true
+		}
+	}
+	if !sawVisual {
+		t.Errorf("verify-shadow: expected a visual/coordinate code-entry step in the trace: %+v", res.Trace.AgentTakeover)
 	}
 }
 

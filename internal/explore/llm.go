@@ -258,6 +258,7 @@ func (e *Explorer) llmCrawl(ctx context.Context) (*Report, error) {
 	if rep.StopReason == "" {
 		rep.StopReason = "steps"
 	}
+	rep.Screenshots = e.screenshotsUsed
 	return rep, nil
 }
 

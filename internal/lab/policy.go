@@ -44,6 +44,7 @@ type PolicyModel struct {
 	visEmailDone bool
 	visPwDone    bool
 	visSubmitted bool
+	visCodeDone  bool
 	visFocus     string
 }
 

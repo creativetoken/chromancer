@@ -12,6 +12,7 @@ var (
 	markerEmail  = [3]uint8{0, 128, 255} // email field
 	markerPass   = [3]uint8{200, 0, 255} // password field
 	markerSubmit = [3]uint8{0, 200, 0}   // submit / primary control
+	markerCode   = [3]uint8{255, 140, 0} // one-time-code field (closed shadow)
 )
 
 func rgbCSS(c [3]uint8) string { return fmt.Sprintf("rgb(%d,%d,%d)", c[0], c[1], c[2]) }

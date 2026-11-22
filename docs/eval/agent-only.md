@@ -192,20 +192,35 @@ camoufox all pass with `canvas-signin` skipped). Build/vet/lint + unit green.
 
 **Status:** the live cold/warm sign-in via visual mode is **not yet confirmed**.
 The autonomous run cannot submit a live login (classifier denial); it must be run
-by the operator (as the earlier live runs were). Command to run a fresh warm
-login (clears the saved session first, restores it after):
+by the operator (as the earlier live runs were). The command below runs a fresh
+warm login. It is wrapped in a subshell with a trap so the **saved session is
+restored on ANY exit** — success, failure, or Ctrl-C — not only on success, and
+the `agentbrowser` run prints a **one-line summary** to stderr at the end
+(`[auth] result=… driver=agent backend=camoufox mode=text+visual steps=… screenshots=… tokens=…/…`):
 
 ```sh
-# from the repo root; session is moved aside to force a real sign-in
-mv .workspace/accounts/bambulab/session.enc .workspace/accounts/bambulab/session.enc.save
-docker run --rm -it -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
- 'set -a; . /src/.env.live; set +a; export AGENTBROWSER_BACKEND=camoufox AGENTBROWSER_WORKSPACE=/src/.workspace AGENTBROWSER_RESOURCES=/src/configs/resources.example.yaml PATH=/usr/local/go/bin:$PATH; \
-  Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & export DISPLAY=:99; sleep 1; \
-  go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --login-url https://bambulab.com/en-gb/sign-in'
-# restore the saved session afterwards
-mv .workspace/accounts/bambulab/session.enc.save .workspace/accounts/bambulab/session.enc
+# From the repo root. The subshell's trap restores the saved Bambu Lab session
+# whatever happens; the run's last stderr line is the summary.
+(
+  set -u
+  SESS=.workspace/accounts/bambulab/session.enc
+  restore() { [ -f "$SESS.save" ] && mv -f "$SESS.save" "$SESS" && echo "[live] restored saved Bambu Lab session"; }
+  trap restore EXIT INT TERM
+  [ -f "$SESS" ] && mv "$SESS" "$SESS.save"   # move the saved session aside to force a real sign-in
+
+  docker run --rm -it -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
+   'set -a; . /src/.env.live; set +a; export AGENTBROWSER_BACKEND=camoufox AGENTBROWSER_WORKSPACE=/src/.workspace AGENTBROWSER_RESOURCES=/src/configs/resources.example.yaml PATH=/usr/local/go/bin:$PATH; \
+    Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & export DISPLAY=:99; sleep 1; \
+    go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --login-url https://bambulab.com/en-gb/sign-in'
+)
 ```
+
+The restore runs via the trap, so the saved session is put back even if the
+`docker run` fails or is interrupted. (`mode=text+visual` in the summary means the
+run escalated to visual mode at least once; `mode=text` means it never needed to.)
 
 Expectation: on bambulab's unreadable sign-in form the agent should escalate to
 visual mode (it does on the `shadow-login` repro) and drive the fields by
-coordinate. The known live OTP-entry gap (§3) still applies and should be watched.
+coordinate. The known live OTP-entry gap (§3) still applies; the `verify-shadow`
+lab repro now exercises visual OTP entry end to end, but the live step is still
+unconfirmed.

@@ -36,6 +36,19 @@ numbers or coordinates when the DOM can't be read. Definition of done:
       operator to run. **Blocked — needs operator.**
 - [x] 10. ARCHITECTURE §6.7 + README vision config + CAMOUFOX + eval §5 done. PR
       ready to open (feat/visual-perception → main).
+- [x] 11. OTP stale-field fix: `perceive.MatchNode` re-resolves the code field by
+      stable attributes before typing (never the stale handle); `doVerify`
+      re-perceives right before entry. Lab `verify-rerender` (code input remounted
+      after it is perceived). Green both backends. (e14bf0d, e6c7ea2)
+- [x] 12. Visual OTP entry: `enter_verification(x,y)` enters a non-perceivable
+      (closed-shadow) code field by coordinate — focus + type-into-focus, code
+      never surfaced to the model. Post-login visual escalation when a code is
+      asked for but no field is perceivable. Lab `verify-shadow`. Green both
+      backends. (e14bf0d, e6c7ea2)
+- [x] 13. Run summary: `agentbrowser auth` prints one line
+      (result/driver/backend/mode/steps/screenshots/tokens); §5 live command
+      wrapped in a subshell trap that restores the saved session on ANY exit.
+      (e6c7ea2)
 
 **Status note (2026-11-22):** full visual pipeline built. Visual-apps e2e green on
 both backends (chromium both; camoufox shadow-login pass + canvas skip-with-reason).

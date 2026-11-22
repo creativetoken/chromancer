@@ -135,6 +135,34 @@ func cliAuthDriver(s string) (auth.AuthDriver, bool) {
 	return ad, ok
 }
 
+// printAuthSummary writes a single human-readable line (to stderr, so stdout
+// stays pure JSON) describing the run's shape: result, driver, backend, agent
+// steps, visual screenshots, and token totals.
+func printAuthSummary(ad auth.AuthDriver, res app.AuthResult) {
+	t := res.Result.Trace
+	status := "done"
+	if res.Err != nil {
+		status = "failed"
+		if res.Reason != "" {
+			status = "failed:" + res.Reason
+		}
+	}
+	driver := "agent"
+	if ad == auth.AuthDriverDeterministic {
+		driver = "deterministic"
+	}
+	backend := t.Backend
+	if backend == "" {
+		backend = "-"
+	}
+	mode := "text"
+	if t.Screenshots > 0 {
+		mode = "text+visual"
+	}
+	fmt.Fprintf(os.Stderr, "[auth] result=%s driver=%s backend=%s mode=%s steps=%d screenshots=%d tokens=%d/%d\n",
+		status, driver, backend, mode, t.AgentSteps, t.Screenshots, t.InTokens, t.OutTokens)
+}
+
 func cmdAuth(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	account := fs.String("account", "", "account name")
@@ -175,6 +203,9 @@ func cmdAuth(ctx context.Context, args []string) error {
 	a.Recovery = rec
 	a.AuthDriver = ad
 	res := a.RunAuth(ctx, *account, m, auth.Hints{LoginURL: *loginURL, SignupURL: *signupURL}, nil)
+	// One-line summary to stderr (stdout stays pure JSON): mode, steps, screenshots,
+	// tokens, result — so a live run's shape is legible without parsing the JSON.
+	printAuthSummary(ad, res)
 	if res.Err != nil {
 		// Emit the trace on failure too: the agent_takeover step log (tool calls,
 		// outcomes and the agent's "why") is how a failed live run is diagnosed.

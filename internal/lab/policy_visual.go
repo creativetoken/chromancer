@@ -61,6 +61,14 @@ func (p *PolicyModel) actVisual(img []byte, obs string, schema json.RawMessage) 
 		p.visSubmitted = true
 		return mustJSON(act{"action": "click_at", "x": sx, "y": sy, "why": "click the sign-in control (visual)"})
 	}
+	// A one-time-code field that is only reachable visually (closed shadow root):
+	// enter the code BY COORDINATE. enter_verification(x,y) focuses the field and
+	// types the fetched code into focus — the code value never reaches the policy.
+	if cx, cy, hasCode := findColorCenter(m, markerCode, vw, vh); hasCode && !p.visCodeDone && has("enter_verification") {
+		p.visCodeDone = true
+		return mustJSON(act{"action": "enter_verification", "channel": "email", "want": "code",
+			"x": cx, "y": cy, "why": "enter the code into the closed-shadow field by coordinate (visual)"})
+	}
 	// Nothing left to operate visually — confirm the session (or wait for the
 	// post-submit navigation to settle).
 	if has("check_logged_in") {

@@ -361,6 +361,8 @@ func allApps() []App {
 		&iconSigninApp{},
 		&shadowLoginApp{},
 		&canvasSigninApp{},
+		&verifyRerenderApp{},
+		&verifyShadowApp{},
 		&interstitialApp{name: "takeover-trust", cookie: "tkt_sid", variant: "trust"},
 		&interstitialApp{name: "takeover-terms", cookie: "tkm_sid", variant: "terms"},
 		&interstitialApp{name: "takeover-injection", cookie: "tki_sid", variant: "injection"},

@@ -50,7 +50,7 @@ type Authenticator struct {
 	// takeover step: a dead end the deterministic flow cannot pass is handed to
 	// the agent (same live page, reusing the existing verifier/captcha/success/
 	// handoff tools) before falling back to a human.
-	Agent    explore.LLMModel
+	Agent explore.LLMModel
 	// VisionAgent, when set, drives visual-mode steps (screenshot + set-of-marks)
 	// for the agent driver. It must be a vision-capable provider. When nil, visual
 	// escalation is unavailable and the agent stays on the text path.

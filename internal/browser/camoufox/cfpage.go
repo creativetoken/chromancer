@@ -262,13 +262,46 @@ func (p *cfPage) WaitElementReady(ctx context.Context, e browser.Element, stable
 	return nil
 }
 
+// Click clicks an element robustly. The normal Playwright click waits for the
+// target to be actionable (visible, stable, enabled, unobscured); a button that
+// is momentarily disabled, animating, or under a transient overlay fails that
+// check and — because timeoutMs hands Playwright the whole remaining deadline —
+// used to block until the ctx deadline ("context deadline exceeded"). That was
+// the bambulab Confirm-button failure. Now each attempt is bounded so the
+// fallbacks get to run: a Force click skips the actionability gate, then a JS
+// dispatch bypasses hit-testing entirely. Each attempt is also capped so a
+// single click cannot consume a long (e.g. multi-minute) verify budget.
 func (p *cfPage) Click(ctx context.Context, e browser.Element) error {
 	el, err := asHandle(e)
 	if err != nil {
 		return err
 	}
 	_ = el.ScrollIntoViewIfNeeded()
-	if err := p.run(ctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: timeoutMs(ctx)}) }); err != nil {
+	attempt := func(d time.Duration, fn func() error) error {
+		sctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return p.run(sctx, fn)
+	}
+	stepMs := float64(8000)
+	force := true
+	// 1) Normal actionable click (the common, fast path for an enabled control).
+	if err := attempt(12*time.Second, func() error {
+		return el.Click(pw.ElementHandleClickOptions{Timeout: &stepMs})
+	}); err == nil {
+		return nil
+	} else if ctx.Err() != nil {
+		return fmt.Errorf("camoufox: click: %w", ctx.Err())
+	}
+	// 2) Force click: skip stability/obscured checks (false-negative actionability).
+	if err := attempt(6*time.Second, func() error {
+		return el.Click(pw.ElementHandleClickOptions{Force: &force, Timeout: &stepMs})
+	}); err == nil {
+		return nil
+	} else if ctx.Err() != nil {
+		return fmt.Errorf("camoufox: click: %w", ctx.Err())
+	}
+	// 3) Last resort: dispatch a DOM click via JS (bypasses hit-testing).
+	if err := attempt(4*time.Second, func() error { _, e := el.Evaluate(`el => el.click()`); return e }); err != nil {
 		return fmt.Errorf("camoufox: click: %w", err)
 	}
 	return nil

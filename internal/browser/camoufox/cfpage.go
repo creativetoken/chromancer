@@ -26,6 +26,59 @@ func clickDebugf(format string, a ...interface{}) {
 	fmt.Fprintf(os.Stderr, "[click-debug] "+format+"\n", a...)
 }
 
+// errStr renders an error for a debug line with a secret scrubbed out — Playwright
+// echoes the argument it was given (e.g. `fill("867730")`) into its error text, so
+// the typed OTP/password must be removed before logging.
+func errStr(err error, secret string) string {
+	if err == nil {
+		return "<nil>"
+	}
+	s := err.Error()
+	if secret != "" {
+		s = strings.ReplaceAll(s, secret, "<redacted>")
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 { // drop Playwright's multi-line call log
+		s = s[:i]
+	}
+	return s
+}
+
+// dumpOTPDOM returns a structural snapshot (NO values) of the element the type
+// handle points to and every candidate code input on the page — tag, id, name,
+// autocomplete, box, shadow-root membership — so a failed OTP entry shows the REAL
+// DOM shape instead of being guessed at. Best-effort; empty string when debug off.
+func dumpOTPDOM(ctx context.Context, p *cfPage, el pw.ElementHandle) string {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return ""
+	}
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out string
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			function info(n){ if(!n) return null; var r=n.getBoundingClientRect();
+				return {tag:n.tagName, id:n.id||null, name:n.getAttribute&&n.getAttribute('name'),
+					type:n.getAttribute&&n.getAttribute('type'), ac:n.getAttribute&&n.getAttribute('autocomplete'),
+					handle:n.getAttribute&&n.getAttribute('data-ab-handle'),
+					w:Math.round(r.width), h:Math.round(r.height), x:Math.round(r.left), y:Math.round(r.top),
+					inShadow:(n.getRootNode&&n.getRootNode()!==document)}; }
+			var handle = info(el);
+			var parents=[]; var p=el.parentElement; for(var i=0;i<4&&p;i++){ parents.push(info(p)); p=p.parentElement; }
+			var cand = [].slice.call(document.querySelectorAll('input[autocomplete="one-time-code"], input[name="code"], input[inputmode="numeric"], input[type="text"]')).map(info);
+			return JSON.stringify({handle:handle, parents:parents, candidates:cand});
+		}`)
+		if err != nil {
+			out = "dump-err: " + err.Error()
+			return nil
+		}
+		if s, ok := v.(string); ok {
+			out = s
+		}
+		return nil
+	})
+	return out
+}
+
 // coordFallbackDisabled reports whether the trusted coordinate click/type fallback
 // is turned off. It defaults ON; AGENTBROWSER_DISABLE_COORD_FALLBACK=1 reverts to
 // the handle-only behaviour (a kill-switch, and the lever that makes the backend
@@ -585,7 +638,7 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	// native-setter trick in fallback B with "'set value' ... does not implement
 	// interface HTMLInputElement" on the live bambulab code field — cannot block it.
 	ferr := short(3*time.Second, func() error { return el.Fill(text, pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
-	clickDebugf("type: fill err=%v landed=%s", ferr, landed())
+	clickDebugf("type: fill err=%s landed=%s", errStr(ferr, text), landed())
 	if readValue() == text {
 		return nil
 	}
@@ -604,7 +657,7 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 		} catch (e) {} }`, text)
 		return jerr
 	})
-	clickDebugf("type: native err=%v landed=%s", jerr, landed())
+	clickDebugf("type: native err=%s landed=%s", errStr(jerr, text), landed())
 	if readValue() == text {
 		return nil
 	}
@@ -618,20 +671,88 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	clickDebugf("type: -> coord budget=%v", budget.Round(time.Millisecond))
 	if budget > 0 && !coordFallbackDisabled() {
 		cerr := p.coordType(ctx, el, text, budget)
-		clickDebugf("type: coord err=%v landed=%s", cerr, landed())
+		clickDebugf("type: coord err=%s landed=%s", errStr(cerr, text), landed())
 		if readValue() == text {
 			return nil
 		}
-		// Nothing landed the value. Report the most specific failure so the trace is
-		// honest about where it stopped.
-		if cerr != nil {
-			return fmt.Errorf("camoufox: type: %w", cerr)
+	}
+	// Fallback D: the handle is not the real input — Fill reported "not an <input>",
+	// or it has no bounding box: a zero-size wrapper <div> while the actual OTP input
+	// is elsewhere (the live bambulab case, confirmed by the debug: hit="DIV" w=0 h=0).
+	// Find the real VISIBLE one-time-code input and type into IT by coordinate.
+	if !coordFallbackDisabled() {
+		if ok := p.coordTypeRealInput(ctx, text, delay); ok {
+			clickDebugf("type: real-input landed=yes")
+			return nil
 		}
+		clickDebugf("type: real-input landed=no dom=%s", dumpOTPDOM(ctx, p, el))
 	}
-	if jerr != nil {
-		return fmt.Errorf("camoufox: type: %w", jerr)
+	// Nothing landed the value; report the most specific failure.
+	switch {
+	case ferr != nil:
+		return fmt.Errorf("camoufox: type: %s", errStr(ferr, text))
+	case jerr != nil:
+		return fmt.Errorf("camoufox: type: %s", errStr(jerr, text))
+	default:
+		return fmt.Errorf("camoufox: type: value did not land in the field")
 	}
-	return nil
+}
+
+// coordTypeRealInput handles the case where the type handle points to a non-input
+// wrapper (a zero-size <div> from a React remount) while the real OTP <input> is
+// elsewhere: it finds the first VISIBLE one-time-code / code / numeric input, types
+// into it by trusted coordinate keyboard, and verifies that input's own value.
+func (p *cfPage) coordTypeRealInput(ctx context.Context, text string, delay float64) bool {
+	sctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	const sel = `input[autocomplete="one-time-code"], input[name="code"], input[inputmode="numeric"]`
+	var cx, cy float64
+	var found bool
+	_ = p.run(sctx, func() error {
+		v, err := p.pg.Evaluate(`(sel) => {
+			for (const el of document.querySelectorAll(sel)) {
+				const r = el.getBoundingClientRect();
+				if (r.width > 0 && r.height > 0) return {x: r.left + r.width/2, y: r.top + r.height/2};
+			}
+			return null;
+		}`, sel)
+		if err != nil {
+			return err
+		}
+		if m, ok := v.(map[string]interface{}); ok {
+			if x, ok := m["x"].(float64); ok {
+				cx, found = x, true
+			}
+			if y, ok := m["y"].(float64); ok {
+				cy = y
+			}
+		}
+		return nil
+	})
+	if !found {
+		return false
+	}
+	_ = p.run(sctx, func() error {
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		if err := m.Click(cx, cy); err != nil {
+			return err
+		}
+		kb := p.pg.Keyboard()
+		_ = kb.Press("Control+a")
+		return kb.Type(text, pw.KeyboardTypeOptions{Delay: &delay})
+	})
+	var got string
+	_ = p.run(sctx, func() error {
+		v, err := p.pg.Evaluate(`(sel) => { for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width > 0 && r.height > 0) return el.value || ''; } return ''; }`, sel)
+		if s, ok := v.(string); ok {
+			got = s
+		}
+		return err
+	})
+	return got == text
 }
 
 // TypeText types into the focused element without a handle (visual/coordinate

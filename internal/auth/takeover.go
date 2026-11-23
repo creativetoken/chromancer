@@ -302,11 +302,32 @@ func (a *Authenticator) escalateHuman(ctx context.Context, p browser.Page, rec *
 		if err := a.doHandoff(ctx, reason); err != nil {
 			return err
 		}
-		if ok, ev := a.confirmAuthenticated(ctx, p, rec); ok {
-			a.trace.SuccessEvidence = ev
-			a.trace.Add("authenticated after human handoff: %s", strings.Join(ev, ", "))
-			return nil
+		// The human just finished in the browser. A login redirect and the auth
+		// cookies it sets can lag the Enter keypress, so settle the page and RETRY
+		// the deterministic success check for a few seconds rather than probing once
+		// immediately (which failed to recognise a human-completed login).
+		deadline := time.Now().Add(12 * time.Second)
+		for {
+			_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+			if ok, ev := a.confirmAuthenticated(ctx, p, rec); ok {
+				a.trace.SuccessEvidence = ev
+				a.trace.Add("authenticated after human handoff: %s", strings.Join(ev, ", "))
+				return nil
+			}
+			if ctx.Err() != nil || time.Now().After(deadline) {
+				break
+			}
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-ctx.Done():
+			}
 		}
+		// Still not detected — record what the page looked like so the failure is
+		// diagnosable (never logs secrets).
+		st := mustPerceive(ctx, a, p)
+		f := Classify(st)
+		a.trace.Add("post-handoff: not authenticated (url=%s title=%q visible_password=%v visible_identifier=%v)",
+			st.URL, st.Title, f.Password != nil, f.Identifier != nil)
 	}
 	return sentinel
 }

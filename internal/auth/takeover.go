@@ -322,12 +322,31 @@ func (a *Authenticator) escalateHuman(ctx context.Context, p browser.Page, rec *
 			case <-ctx.Done():
 			}
 		}
-		// Still not detected — record what the page looked like so the failure is
-		// diagnosable (never logs secrets).
+		// The strict deterministic signals didn't fire. The OPERATOR completed the
+		// handoff and pressed Enter, so trust a page that is clearly PAST the login
+		// flow — no visible password field and the URL has left the sign-in route
+		// onto a different, non-auth page. (bambulab lands on its homepage after
+		// login, whose search box trips the strict detector's "identifier present"
+		// guard, and whose auth cookies did not register as strong evidence.)
 		st := mustPerceive(ctx, a, p)
 		f := Classify(st)
-		a.trace.Add("post-handoff: not authenticated (url=%s title=%q visible_password=%v visible_identifier=%v)",
-			st.URL, st.Title, f.Password != nil, f.Identifier != nil)
+		if f.Password == nil && a.base.URL != "" && st.URL != a.base.URL && !authWordRe.MatchString(st.Title) {
+			a.trace.SuccessEvidence = []string{"operator_confirmed:" + st.URL}
+			a.trace.Add("authenticated after human handoff (operator-confirmed, off the login route): %s", st.URL)
+			return nil
+		}
+		// Record what the page looked like (cookie NAMES only, never values) so the
+		// failure — and why the strong signals missed — is diagnosable next time.
+		cookieNames := ""
+		if cur, err := p.ExportState(ctx); err == nil {
+			var names []string
+			for _, c := range cur.Cookies {
+				names = append(names, c.Name)
+			}
+			cookieNames = strings.Join(names, ",")
+		}
+		a.trace.Add("post-handoff: not authenticated (url=%s title=%q visible_password=%v visible_identifier=%v cookies=[%s])",
+			st.URL, st.Title, f.Password != nil, f.Identifier != nil, cookieNames)
 	}
 	return sentinel
 }

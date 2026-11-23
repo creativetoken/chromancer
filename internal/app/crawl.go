@@ -120,6 +120,7 @@ func (a *App) RunCrawl(ctx context.Context, account string, opts CrawlOptions, a
 		Audit:    al, Budget: bud, Verifier: a.verifier(account, creds, asker),
 		Captcha: resolver, Handoff: handoff,
 		Capture: handback.CaptureWindow{N: 2, T: 4 * time.Second}, EntryCache: ws.CacheDir, Timeout: 8 * time.Second,
+		VerifyTimeout: a.Cfg.VerifyTimeout,
 	}
 
 	driver := opts.resolveDriver()

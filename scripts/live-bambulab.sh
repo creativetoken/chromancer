@@ -30,6 +30,7 @@ trap restore EXIT INT TERM
 HANDOFF_PORT="${HANDOFF_PORT:-8899}"
 docker run --rm -it -p "127.0.0.1:${HANDOFF_PORT}:${HANDOFF_PORT}" -v "$PWD":/src -w /src agentbrowser-camoufox-test:latest bash -c \
  'set -a; . /src/.env.live; set +a; export AGENTBROWSER_BACKEND=camoufox AGENTBROWSER_WORKSPACE=/src/.workspace AGENTBROWSER_RESOURCES=/src/configs/resources.example.yaml PATH=/usr/local/go/bin:$PATH; \
+  export AGENTBROWSER_TIMEOUT="${AGENTBROWSER_TIMEOUT:-14m}" AGENTBROWSER_VERIFY_TIMEOUT="${AGENTBROWSER_VERIFY_TIMEOUT:-12m}"; \
   export AGENTBROWSER_HANDOFF_BIND=0.0.0.0:'"${HANDOFF_PORT}"' AGENTBROWSER_HANDOFF_ADVERTISE=127.0.0.1; \
   Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & export DISPLAY=:99; sleep 1; \
   go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --login-url https://bambulab.com/en-gb/sign-in'

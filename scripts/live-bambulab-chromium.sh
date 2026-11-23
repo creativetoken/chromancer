@@ -24,6 +24,11 @@ export AGENTBROWSER_BACKEND=chromium
 export AGENTBROWSER_CHROME="${AGENTBROWSER_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 export AGENTBROWSER_WORKSPACE="$PWD/.workspace"
 export AGENTBROWSER_RESOURCES="${AGENTBROWSER_RESOURCES:-$PWD/configs/resources.example.yaml}"
+# The Bambu Lab OTP arrives via the HackerOne mail-forwarder, which can take many
+# minutes to relay. Give the verify poll (and the overall job budget) room to
+# outlast that delivery latency instead of giving up after the 90s/5m defaults.
+export AGENTBROWSER_TIMEOUT="${AGENTBROWSER_TIMEOUT:-14m}"
+export AGENTBROWSER_VERIFY_TIMEOUT="${AGENTBROWSER_VERIFY_TIMEOUT:-12m}"
 
 go run ./cmd/agentbrowser auth --account bambulab --mode login --auth-driver agent --headful \
   --login-url https://bambulab.com/en-gb/sign-in

@@ -556,6 +556,14 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 		})
 		return got
 	}
+	// landed reports WHETHER the typed value is in the field, never the value itself —
+	// the field may hold a password/OTP, which must never be logged.
+	landed := func() string {
+		if readValue() == text {
+			return "yes"
+		}
+		return "no"
+	}
 	clickDebugf("type: budget=%v len=%d", remaining().Round(time.Millisecond), len(text))
 	// Normal path (best-effort — errors swallowed; the fallbacks below recover). Use
 	// Playwright's own focus/clear/type: a raw `el.value=''` desyncs a framework-
@@ -568,7 +576,7 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	_ = short(2*time.Second, func() error {
 		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: &stepMs})
 	})
-	clickDebugf("type: real-keys took=%v value=%q budgetLeft=%v", time.Since(t0).Round(time.Millisecond), readValue(), remaining().Round(time.Millisecond))
+	clickDebugf("type: real-keys took=%v landed=%s budgetLeft=%v", time.Since(t0).Round(time.Millisecond), landed(), remaining().Round(time.Millisecond))
 	if readValue() == text {
 		return nil
 	}
@@ -577,7 +585,7 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	// native-setter trick in fallback B with "'set value' ... does not implement
 	// interface HTMLInputElement" on the live bambulab code field — cannot block it.
 	ferr := short(3*time.Second, func() error { return el.Fill(text, pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
-	clickDebugf("type: fill err=%v value=%q", ferr, readValue())
+	clickDebugf("type: fill err=%v landed=%s", ferr, landed())
 	if readValue() == text {
 		return nil
 	}
@@ -596,7 +604,7 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 		} catch (e) {} }`, text)
 		return jerr
 	})
-	clickDebugf("type: native err=%v value=%q", jerr, readValue())
+	clickDebugf("type: native err=%v landed=%s", jerr, landed())
 	if readValue() == text {
 		return nil
 	}
@@ -610,7 +618,7 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	clickDebugf("type: -> coord budget=%v", budget.Round(time.Millisecond))
 	if budget > 0 && !coordFallbackDisabled() {
 		cerr := p.coordType(ctx, el, text, budget)
-		clickDebugf("type: coord err=%v value=%q", cerr, readValue())
+		clickDebugf("type: coord err=%v landed=%s", cerr, landed())
 		if readValue() == text {
 			return nil
 		}

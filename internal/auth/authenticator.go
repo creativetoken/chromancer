@@ -557,6 +557,13 @@ func (a *Authenticator) doHandoff(ctx context.Context, reason captcha.BlockReaso
 	return nil
 }
 
+// sendCodeGrace is how long doVerify polls for an already-delivered (auto-sent)
+// code before pressing a "Send code" trigger, so an auto-sending site isn't sent
+// a redundant request that burns its re-send cooldown. Correctness does not
+// depend on this value — because *since is never advanced, a code that arrives
+// after the grace window (even after a needless trigger press) is still matched.
+const sendCodeGrace = 8 * time.Second
+
 // doVerify fetches a code/link and applies it to the page.
 func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time, verifyFor time.Duration) error {
 	vd := verifyFor
@@ -572,36 +579,53 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 	}
 	a.trace.Verification = append(a.trace.Verification, fmt.Sprintf("%s (%s)", vs.Channel, vs.Hint))
 	a.log("verification", map[string]any{"channel": string(vs.Channel), "hint": vs.Hint, "link_only": vs.LinkOnly})
-	// Some sites don't dispatch the code until a "Send code" trigger is clicked
-	// (e.g. bambulab's verification modal has a "Send code" button inside the field,
-	// and the code field stays empty until it is pressed). Click it BEFORE fetching,
-	// but ONLY ONCE per sign-in: the server rate-limits re-sends (a cooldown), so
-	// re-clicking on every retry just burns the cooldown and — by advancing the
-	// freshness window each time — discards the code already in flight. On retries
-	// we keep the same window and re-fetch the code this first click produced. The
-	// trigger is often a React <span/div onClick> with no onclick attribute/role, so
-	// it is invisible to the DOM perceiver — hence the JS fallback by text.
-	if !vs.LinkOnly && !a.codeSent {
-		before := time.Now()
-		clicked := ""
-		if vs.SendCode != nil {
-			if err := (actor{deps}).click(ctx, vs.SendCode, "send-code"); err == nil {
-				clicked = firstNonEmptyStr(vs.SendCode.Name, vs.SendCode.Text, "send-code")
-			}
-		}
-		if clicked == "" {
-			clicked = clickSendCodeJS(ctx, p)
-		}
-		if clicked != "" {
-			a.codeSent = true
-			*since = before
-			a.trace.Add("verification: triggered code delivery (%q)", strings.TrimSpace(clicked))
-			_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
-		}
+	// The verification code reaches us one of two ways: (a) auto-sent when the
+	// login form was submitted (e.g. bambulab) — already in flight or in the inbox
+	// by the time this screen appears — or (b) only after a "Send code" trigger is
+	// pressed. We must NOT assume (b). Pressing "Send code" when the code was
+	// already auto-sent burns the server's re-send cooldown, and — the bug this
+	// fixes — advancing the freshness window to the click excludes the code already
+	// delivered, so the fetch times out on a code sitting in the inbox. So: poll
+	// briefly for an already-delivered code first; only if none shows do we press
+	// the trigger (once per sign-in), and we NEVER advance *since — GetCode returns
+	// the newest unclaimed code, so a superseded one cannot win, and a stale code
+	// from before this sign-in is already excluded by the window's start. The
+	// trigger is often a React <span/div onClick> with no onclick/role, invisible
+	// to the DOM perceiver — hence the JS fallback by text.
+	fetch := func(dl time.Time) (verify.Result, error) {
+		fctx, fcancel := context.WithDeadline(ctx, dl)
+		defer fcancel()
+		return a.Verifier.GetCode(fctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: dl})
 	}
-	vctx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: deadline})
+	var res verify.Result
+	var err error
+	if !vs.LinkOnly && !a.codeSent {
+		grace := time.Now().Add(sendCodeGrace)
+		if grace.After(deadline) {
+			grace = deadline
+		}
+		res, err = fetch(grace) // (a) catch an auto-sent code without touching the trigger
+		if err != nil && (errors.Is(err, verify.ErrTimeout) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() == nil {
+			// (b) nothing delivered yet — press the trigger once, then poll the rest.
+			clicked := ""
+			if vs.SendCode != nil {
+				if cerr := (actor{deps}).click(ctx, vs.SendCode, "send-code"); cerr == nil {
+					clicked = firstNonEmptyStr(vs.SendCode.Name, vs.SendCode.Text, "send-code")
+				}
+			}
+			if clicked == "" {
+				clicked = clickSendCodeJS(ctx, p)
+			}
+			if clicked != "" {
+				a.codeSent = true
+				a.trace.Add("verification: triggered code delivery (%q)", strings.TrimSpace(clicked))
+				_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+			}
+			res, err = fetch(deadline)
+		}
+	} else {
+		res, err = fetch(deadline)
+	}
 	if err != nil {
 		if errors.Is(err, verify.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("%w: %v", ErrVerifyTimeout, err)

@@ -262,46 +262,61 @@ func (p *cfPage) WaitElementReady(ctx context.Context, e browser.Element, stable
 	return nil
 }
 
-// Click clicks an element robustly. The normal Playwright click waits for the
-// target to be actionable (visible, stable, enabled, unobscured); a button that
-// is momentarily disabled, animating, or under a transient overlay fails that
-// check and — because timeoutMs hands Playwright the whole remaining deadline —
-// used to block until the ctx deadline ("context deadline exceeded"). That was
-// the bambulab Confirm-button failure. Now each attempt is bounded so the
-// fallbacks get to run: a Force click skips the actionability gate, then a JS
-// dispatch bypasses hit-testing entirely. Each attempt is also capped so a
-// single click cannot consume a long (e.g. multi-minute) verify budget.
+// Click clicks an element robustly, mirroring the rodbackend contract: a real
+// Playwright click first (full mouse/pointer events, waits for the target to be
+// actionable — visible, stable, enabled, unobscured), and when that cannot land,
+// a JS click dispatched ON THE ELEMENT ITSELF. The element-level fallback ignores
+// overlays and actionability gating and always hits the intended element, so for
+// a submit/confirm button it still triggers the form submit.
+//
+// Two things this gets right that an earlier version did not:
+//   - Budget: callers bound a click to a short deadline (actor.bound ~ 8s). The
+//     actionable attempt is capped at a slice of that budget so the JS fallback is
+//     always reachable; an earlier version let the first attempt consume the whole
+//     8s, which surfaced as the bambulab Confirm "click: context deadline exceeded".
+//   - No Force click: a Playwright Force click skips actionability but still
+//     dispatches a real mouse event at a POINT, so over a transparent overlay it
+//     "succeeds" by clicking the overlay — a false positive that never submits the
+//     form. The element-level JS click cannot mis-target like that.
 func (p *cfPage) Click(ctx context.Context, e browser.Element) error {
 	el, err := asHandle(e)
 	if err != nil {
 		return err
 	}
 	_ = el.ScrollIntoViewIfNeeded()
-	attempt := func(d time.Duration, fn func() error) error {
-		sctx, cancel := context.WithTimeout(ctx, d)
-		defer cancel()
-		return p.run(sctx, fn)
+
+	remaining := func() time.Duration {
+		if dl, ok := ctx.Deadline(); ok {
+			return time.Until(dl)
+		}
+		return 8 * time.Second
 	}
-	stepMs := float64(8000)
-	force := true
-	// 1) Normal actionable click (the common, fast path for an enabled control).
-	if err := attempt(12*time.Second, func() error {
-		return el.Click(pw.ElementHandleClickOptions{Timeout: &stepMs})
-	}); err == nil {
-		return nil
-	} else if ctx.Err() != nil {
-		return fmt.Errorf("camoufox: click: %w", ctx.Err())
+	if remaining() <= 0 {
+		return fmt.Errorf("camoufox: click: %w", context.DeadlineExceeded)
 	}
-	// 2) Force click: skip stability/obscured checks (false-negative actionability).
-	if err := attempt(6*time.Second, func() error {
-		return el.Click(pw.ElementHandleClickOptions{Force: &force, Timeout: &stepMs})
-	}); err == nil {
-		return nil
-	} else if ctx.Err() != nil {
-		return fmt.Errorf("camoufox: click: %w", ctx.Err())
+	// 1) Real actionable click — capped so the JS fallback keeps a turn (reserve ~2s,
+	//    and cap the attempt at 5s so a wrongly-"unstable"/obscured target fails fast).
+	primary := remaining() - 2*time.Second
+	if primary > 5*time.Second {
+		primary = 5 * time.Second
 	}
-	// 3) Last resort: dispatch a DOM click via JS (bypasses hit-testing).
-	if err := attempt(4*time.Second, func() error { _, e := el.Evaluate(`el => el.click()`); return e }); err != nil {
+	if primary > 0 {
+		sctx, cancel := context.WithTimeout(ctx, primary)
+		ms := float64(primary / time.Millisecond)
+		cerr := p.run(sctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: &ms}) })
+		cancel()
+		if cerr == nil {
+			return nil
+		}
+	}
+	// 2) Fallback: dispatch the click on the element itself (bypasses hit-testing).
+	rem := remaining()
+	if rem <= 0 {
+		return fmt.Errorf("camoufox: click: %w", context.DeadlineExceeded)
+	}
+	sctx, cancel := context.WithTimeout(ctx, rem)
+	defer cancel()
+	if err := p.run(sctx, func() error { _, e := el.Evaluate(`el => el.click()`); return e }); err != nil {
 		return fmt.Errorf("camoufox: click: %w", err)
 	}
 	return nil

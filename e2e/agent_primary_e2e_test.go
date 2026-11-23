@@ -131,6 +131,12 @@ func TestE2EAgentPrimaryVerifierApps(t *testing.T) {
 		// span is clicked (bambulab's verification modal): the verify flow must
 		// trigger delivery itself before the code can be fetched.
 		{"verify-sendcode", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code is AUTO-SENT on login submit (Send-code is a no-op cooldown), and the
+		// Confirm button sits under a pointer-events overlay: the verify flow must
+		// poll for the already-delivered code without advancing its window, and the
+		// click must fall through to a JS dispatch within the actor's short budget.
+		// This is the exact pair of bugs that broke the live bambulab OTP run.
+		{"verify-autosend", lab.DefaultUser, lab.DefaultPass, ""},
 	}
 	for _, c := range cases {
 		c := c

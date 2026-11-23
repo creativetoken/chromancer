@@ -425,6 +425,20 @@ func (p *cfPage) Click(ctx context.Context, e browser.Element) error {
 		}
 	}
 
+	// If the handle has no bounding box it is a zero-size wrapper (the live bambulab
+	// verify modal resolves the Confirm/code handles to <div> wrappers). The
+	// handle-based fallbacks cannot help — a JS el.click() on the wrapper is a no-op
+	// that still reports success, and a coordinate click has no point — so find the
+	// REAL visible control by the handle's label/text and click that.
+	if !coordFallbackDisabled() && !p.elementHasBox(ctx, el) {
+		clickDebugf("click: handle has no box -> real-target dom=%s", dumpClickDOM(ctx, p, el))
+		if p.coordClickRealTarget(ctx, el) {
+			clickDebugf("click: real-target landed=yes")
+			return nil
+		}
+		clickDebugf("click: real-target landed=no")
+	}
+
 	// The actionable click failed — obscured, or (the live bambulab case) the modal
 	// animates every frame so the target is never "stable". Fall through to two
 	// dispatches that do NOT wait on actionability. Both are best-effort: neither can
@@ -520,6 +534,113 @@ func (p *cfPage) coordClick(ctx context.Context, el pw.ElementHandle, budget tim
 		}
 		return m.Click(cx, cy)
 	})
+}
+
+// elementHasBox reports whether el currently has a positive on-screen bounding box.
+// A zero-size handle is a wrapper (the live bambulab verify modal resolves the
+// Confirm/code handles to collapsed <div> wrappers), which the handle-based
+// click/type paths cannot act on. Defaults to true on a probe failure so the normal
+// path is never skipped for a healthy element.
+func (p *cfPage) elementHasBox(ctx context.Context, el pw.ElementHandle) bool {
+	sctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	has := true
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }`)
+		if err != nil {
+			return err
+		}
+		if b, ok := v.(bool); ok {
+			has = b
+		}
+		return nil
+	})
+	return has
+}
+
+// coordClickRealTarget handles a click whose handle is a zero-size wrapper: it reads
+// the handle's visible label and finds the real VISIBLE control (a button/link/
+// submit whose text matches, or a confirm/verify/submit control when the label
+// implies one) and clicks it by trusted coordinate. Returns whether it dispatched.
+func (p *cfPage) coordClickRealTarget(ctx context.Context, el pw.ElementHandle) bool {
+	sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var cx, cy float64
+	var found bool
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			var label = ((el.textContent||'') + ' ' + (el.getAttribute('aria-label')||'') + ' ' + (el.value||'')).trim().toLowerCase();
+			var wantSubmit = /(confirm|verify|submit|continue|sign in|log in)/.test(label);
+			var sel = 'button, [role="button"], input[type="submit"], input[type="button"], a[href]';
+			for (var n of document.querySelectorAll(sel)) {
+				var r = n.getBoundingClientRect();
+				if (r.width <= 0 || r.height <= 0) continue;
+				var t = ((n.textContent||'') + ' ' + (n.getAttribute('aria-label')||'') + ' ' + (n.value||'')).trim().toLowerCase();
+				var textMatch = label && t && (t.indexOf(label) >= 0 || label.indexOf(t) >= 0);
+				var submitMatch = wantSubmit && (n.type === 'submit' || /(confirm|verify|submit|continue)/.test(t));
+				if (textMatch || submitMatch) {
+					return {x: r.left + r.width/2, y: r.top + r.height/2};
+				}
+			}
+			return null;
+		}`)
+		if err != nil {
+			return err
+		}
+		if m, ok := v.(map[string]interface{}); ok {
+			if x, ok := m["x"].(float64); ok {
+				cx, found = x, true
+			}
+			if y, ok := m["y"].(float64); ok {
+				cy = y
+			}
+		}
+		return nil
+	})
+	if !found {
+		return false
+	}
+	_ = p.run(sctx, func() error {
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		return m.Click(cx, cy)
+	})
+	return true
+}
+
+// dumpClickDOM returns a structural snapshot (no values) of a zero-size click
+// handle and every visible clickable on the page, so a failed wrapper-handle click
+// shows the real control layout instead of being guessed at. Empty when debug off.
+func dumpClickDOM(ctx context.Context, p *cfPage, el pw.ElementHandle) string {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return ""
+	}
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out string
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			function info(n){ if(!n) return null; var r=n.getBoundingClientRect();
+				return {tag:n.tagName, id:n.id||null, role:n.getAttribute&&n.getAttribute('role'),
+					label:((n.textContent||'').trim().slice(0,24))||null,
+					w:Math.round(r.width), h:Math.round(r.height), x:Math.round(r.left), y:Math.round(r.top)}; }
+			var handle = info(el);
+			var cand = [].slice.call(document.querySelectorAll('button, [role="button"], input[type="submit"], a[href]'))
+				.map(info).filter(function(c){ return c && c.w>0 && c.h>0; });
+			return JSON.stringify({handle:handle, clickables:cand});
+		}`)
+		if err != nil {
+			out = "dump-err: " + err.Error()
+			return nil
+		}
+		if s, ok := v.(string); ok {
+			out = s
+		}
+		return nil
+	})
+	return out
 }
 
 // coordType focuses el with a trusted coordinate mouse click, selects any existing

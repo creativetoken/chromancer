@@ -487,3 +487,27 @@
   perceiver to capture all React onClick elements (floods the observation in a
   React app, raises per-step cost); rely on the LLM alone (it can't see the span).
   Lab repro: verify-sendcode (unperceivable React-span trigger), green both backends.
+
+- **Camoufox click/type land on animating & trusted-event-gated controls via a
+  trusted coordinate fallback (2026-11-23).** The live bambulab Confirm failed on
+  camoufox with `click: context deadline exceeded` + an empty code field, while
+  the same flow logs in on chromium/go-rod. Three camoufox-backend defects (all
+  `internal/browser/camoufox/cfpage.go`): (1) `el.ScrollIntoViewIfNeeded()` was
+  called with no timeout → Playwright's 30s default, which blocks on a control
+  that is not "stable" and drained the whole per-action budget (now bounded to
+  ~1s via `scrollIntoView`); (2) Playwright's actionability-gated
+  `ElementHandle.Click` never settles on an animating / never-"stable" target, and
+  the page-JS `el.click()` fallback dispatches an UNTRUSTED event (`isTrusted ===
+  false`) an anti-bot handler ignores — whereas go-rod dispatches a TRUSTED CDP
+  coordinate click; (3) a dispatch after a navigating click aborts the navigation.
+  Decision: camoufox `Click` adds a TRUSTED coordinate `Mouse` click (`coordClick`)
+  and `TypeInto` a TRUSTED `Keyboard` type (`coordType`) — no actionability wait,
+  real browser input, mirroring go-rod — and the trusted coordinate click is the
+  LAST dispatch (order: actionable → untrusted-JS el.click [overlays] → trusted
+  coordinate [animating/gated]). `AGENTBROWSER_DISABLE_COORD_FALLBACK=1` is a
+  kill-switch; `AGENTBROWSER_CLICK_DEBUG=1` prints per-click budget/sub-step/trust.
+  · alt: raw `el.value=''` clear (rejected — desyncs React-controlled inputs, broke
+  modal/spa-jwt; keep `el.Fill`). Lab repro: `TestE2ECoordEntryTrustedModal`
+  (camoufox-only; animating + trusted-gated modal), proven red→green via the
+  kill-switch. go-rod's own `WaitStableRAF` would hang on a perpetually-animating
+  element — a pre-existing rodbackend trait real sites do not trigger.

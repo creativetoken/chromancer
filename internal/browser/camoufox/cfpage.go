@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,62 @@ import (
 
 	"github.com/creativetoken/chromancer/internal/browser"
 )
+
+// clickDebugf emits click/type diagnostics to stderr when AGENTBROWSER_CLICK_DEBUG
+// is set. It is a no-op otherwise, so it is free on the normal path. The output
+// (per-step durations, errors, and the target's live actionability) is what turns
+// a reproduction — in the lab or in a single instrumented live run — into a
+// definitive diagnosis instead of a guess.
+func clickDebugf(format string, a ...interface{}) {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[click-debug] "+format+"\n", a...)
+}
+
+// coordFallbackDisabled reports whether the trusted coordinate click/type fallback
+// is turned off. It defaults ON; AGENTBROWSER_DISABLE_COORD_FALLBACK=1 reverts to
+// the handle-only behaviour (a kill-switch, and the lever that makes the backend
+// trusted-modal e2e deterministically reproduce the pre-fix failure).
+func coordFallbackDisabled() bool {
+	return os.Getenv("AGENTBROWSER_DISABLE_COORD_FALLBACK") == "1"
+}
+
+// probeState returns a one-line snapshot of el's live actionability: whether it
+// is still attached, its rect, whether it is the hit-test target at its own
+// centre (an overlay intercepting pointer events is the classic actionable-click
+// killer), and whether it is disabled. Best-effort; never blocks more than ~1s.
+func probeState(ctx context.Context, p *cfPage, el pw.ElementHandle) string {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return ""
+	}
+	sctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	var out string
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			if (!el.isConnected) return {attached:false};
+			const r = el.getBoundingClientRect();
+			const cx = r.left + r.width/2, cy = r.top + r.height/2;
+			const top = document.elementFromPoint(cx, cy);
+			return {
+				attached:true, w:Math.round(r.width), h:Math.round(r.height),
+				x:Math.round(cx), y:Math.round(cy),
+				disabled: !!el.disabled,
+				hitSelf: top === el,
+				hit: top ? (top.tagName+(top.id?('#'+top.id):'')) : null,
+			};
+		}`)
+		if err != nil {
+			out = "probe-err: " + err.Error()
+			return nil
+		}
+		b, _ := json.Marshal(v)
+		out = string(b)
+		return nil
+	})
+	return out
+}
 
 // cfValue wraps a Playwright Evaluate result as a neutral browser.Value.
 type cfValue struct{ v interface{} }
@@ -283,7 +340,7 @@ func (p *cfPage) Click(ctx context.Context, e browser.Element) error {
 	if err != nil {
 		return err
 	}
-	_ = el.ScrollIntoViewIfNeeded()
+	p.scrollIntoView(ctx, el)
 
 	remaining := func() time.Duration {
 		if dl, ok := ctx.Deadline(); ok {
@@ -294,32 +351,154 @@ func (p *cfPage) Click(ctx context.Context, e browser.Element) error {
 	if remaining() <= 0 {
 		return fmt.Errorf("camoufox: click: %w", context.DeadlineExceeded)
 	}
-	// 1) Real actionable click — capped so the JS fallback keeps a turn (reserve ~2s,
-	//    and cap the attempt at 5s so a wrongly-"unstable"/obscured target fails fast).
-	primary := remaining() - 2*time.Second
-	if primary > 5*time.Second {
-		primary = 5 * time.Second
+	clickDebugf("click: budget=%v state=%s", remaining().Round(time.Millisecond), probeState(ctx, p, el))
+
+	// 1) Playwright's actionable click — the clean path for a normal control. Capped
+	//    short (≤3s, always reserving budget) so an animating / never-"stable" target
+	//    cannot burn the whole budget before the trusted coordinate fallback runs.
+	primary := remaining() - 3*time.Second
+	if primary > 3*time.Second {
+		primary = 3 * time.Second
 	}
 	if primary > 0 {
 		sctx, cancel := context.WithTimeout(ctx, primary)
 		ms := float64(primary / time.Millisecond)
+		t0 := time.Now()
 		cerr := p.run(sctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: &ms}) })
 		cancel()
+		clickDebugf("click: actionable took=%v err=%v", time.Since(t0).Round(time.Millisecond), cerr)
 		if cerr == nil {
 			return nil
 		}
 	}
-	// 2) Fallback: dispatch the click on the element itself (bypasses hit-testing).
-	rem := remaining()
-	if rem <= 0 {
-		return fmt.Errorf("camoufox: click: %w", context.DeadlineExceeded)
+
+	// The actionable click failed — obscured, or (the live bambulab case) the modal
+	// animates every frame so the target is never "stable". Fall through to two
+	// dispatches that do NOT wait on actionability. Both are best-effort: neither can
+	// confirm the page reacted, so the caller re-perceives and retries if the form
+	// did not advance. We run both because each covers a different trap.
+	var landed bool
+	var lastErr error
+
+	// 2) Element-level JS click — dispatches ON the element, ignoring hit-testing, so
+	//    it reaches a target under a transparent overlay (the verify-autosend case)
+	//    where a coordinate click would hit the overlay. The event is UNTRUSTED, so a
+	//    trusted-event-gated handler ignores it; step 3 covers that. Run FIRST so that
+	//    the trusted coordinate click is the LAST dispatch — a navigation it triggers
+	//    must not be raced (and aborted) by a following el.Evaluate. If this click DOES
+	//    submit (overlay on an idle page), step 3 then finds the element detached and
+	//    simply no-ops.
+	if rem := remaining(); rem > 0 {
+		sctx, cancel := context.WithTimeout(ctx, rem)
+		t := time.Now()
+		jerr := p.run(sctx, func() error { _, e := el.Evaluate(`el => el.click()`); return e })
+		cancel()
+		clickDebugf("click: js-fallback took=%v err=%v", time.Since(t).Round(time.Millisecond), jerr)
+		if jerr == nil {
+			landed = true
+		} else {
+			lastErr = jerr
+		}
 	}
-	sctx, cancel := context.WithTimeout(ctx, rem)
+
+	// 3) Trusted coordinate click at the element's centre — a real browser mouse event
+	//    (move+down+up), no actionability wait, no page-JS, mirroring go-rod's CDP
+	//    click on the chromium backend (which logs into bambulab). The one path that
+	//    lands on an animating control whose handler requires a TRUSTED event
+	//    (isTrusted) — the live camoufox failure. LAST so the navigation it triggers is
+	//    not aborted by any following dispatch.
+	if rem := remaining(); rem > 0 && !coordFallbackDisabled() {
+		t := time.Now()
+		cerr := p.coordClick(ctx, el, rem)
+		clickDebugf("click: coord took=%v err=%v", time.Since(t).Round(time.Millisecond), cerr)
+		if cerr == nil {
+			landed = true
+		} else if !landed {
+			lastErr = cerr
+		}
+	}
+
+	if landed {
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = context.DeadlineExceeded
+	}
+	return fmt.Errorf("camoufox: click: %w", lastErr)
+}
+
+// scrollIntoView best-effort brings el into view, bounded SHORT. ElementHandle's
+// scroll-into-view waits for the element to be "stable" and defaults to a 30s
+// timeout, so on an animating / never-"stable" control (the live bambulab modal)
+// an unbounded call silently drains the whole action budget before the click/type
+// even starts — leaving the budget negative and every step skipped. Capped to ~1s
+// and run through p.run so the caller's context also applies; failure is ignored
+// (the coordinate paths use BoundingBox and tolerate an element not scrolled).
+func (p *cfPage) scrollIntoView(ctx context.Context, el pw.ElementHandle) {
+	sctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	if err := p.run(sctx, func() error { _, e := el.Evaluate(`el => el.click()`); return e }); err != nil {
-		return fmt.Errorf("camoufox: click: %w", err)
-	}
-	return nil
+	to := float64(800)
+	_ = p.run(sctx, func() error {
+		return el.ScrollIntoViewIfNeeded(pw.ElementHandleScrollIntoViewIfNeededOptions{Timeout: &to})
+	})
+}
+
+// coordClick dispatches a TRUSTED mouse click at el's centre using the page's
+// virtual mouse. Unlike ElementHandle.Click it does not wait for the target to be
+// "actionable" (visible+stable+enabled+hit-testable), so it lands on a control that
+// animates every frame or that a guarded page never settles — the way go-rod's CDP
+// click does on the chromium backend. Bounded by budget.
+func (p *cfPage) coordClick(ctx context.Context, el pw.ElementHandle, budget time.Duration) error {
+	sctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	return p.run(sctx, func() error {
+		box, err := el.BoundingBox()
+		if err != nil {
+			return err
+		}
+		if box == nil || box.Width <= 0 || box.Height <= 0 {
+			return fmt.Errorf("no bounding box")
+		}
+		cx := box.X + box.Width/2
+		cy := box.Y + box.Height/2
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		return m.Click(cx, cy)
+	})
+}
+
+// coordType focuses el with a trusted coordinate mouse click, selects any existing
+// content, and types the text with the page keyboard — real, TRUSTED key events
+// with no actionability wait, mirroring go-rod's CDP typing. It is the type
+// counterpart of coordClick for a controlled field that ignores untrusted input
+// events or that never settles for ElementHandle.Type. Bounded by budget.
+func (p *cfPage) coordType(ctx context.Context, el pw.ElementHandle, text string, budget time.Duration) error {
+	sctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	return p.run(sctx, func() error {
+		box, err := el.BoundingBox()
+		if err != nil {
+			return err
+		}
+		if box == nil || box.Width <= 0 || box.Height <= 0 {
+			return fmt.Errorf("no bounding box")
+		}
+		cx := box.X + box.Width/2
+		cy := box.Y + box.Height/2
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		if err := m.Click(cx, cy); err != nil {
+			return err
+		}
+		kb := p.pg.Keyboard()
+		_ = kb.Press("Control+a") // select existing content so the type replaces it
+		delay := float64(20)
+		return kb.Type(text, pw.KeyboardTypeOptions{Delay: &delay})
+	})
 }
 
 func (p *cfPage) ClickAt(ctx context.Context, x, y int) error {
@@ -346,45 +525,59 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	if err != nil {
 		return err
 	}
-	_ = el.ScrollIntoViewIfNeeded()
-	// Each step is bounded to a few seconds (like rodbackend's 3s per-step budget)
-	// so a guarded field that makes one step block cannot consume the whole
-	// verification budget before the fallback runs — that was the "type timed out"
-	// symptom after the first camoufox OTP fix.
-	short := func(fn func() error) error {
-		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	p.scrollIntoView(ctx, el)
+	remaining := func() time.Duration {
+		if dl, ok := ctx.Deadline(); ok {
+			return time.Until(dl)
+		}
+		return 8 * time.Second
+	}
+	// One slow step at most before the fallbacks. A guarded/animating field makes the
+	// real-key attempt block until timeout, so it is capped SHORT and the budget that
+	// remains is reserved for the trusted coordinate fallback and the submit click
+	// that follows — overrunning here is what left the submit click with an expired
+	// context ("camoufox: click: context deadline exceeded", empty field).
+	short := func(d time.Duration, fn func() error) error {
+		sctx, cancel := context.WithTimeout(ctx, d)
 		defer cancel()
 		return p.run(sctx, fn)
 	}
-	stepMs := float64(3000)
-	force := true
+	stepMs := float64(1500)
 	delay := float64(20)
-	// Normal path (best-effort — errors swallowed; the fallback below recovers).
-	_ = short(func() error { return el.Focus() })
-	_ = short(func() error { return el.Fill("", pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) }) // clear
-	_ = short(func() error {
+	force := true
+	readValue := func() string {
+		var got string
+		_ = short(time.Second, func() error {
+			v, verr := el.Evaluate("el => el.value")
+			if s, ok := v.(string); ok {
+				got = s
+			}
+			return verr
+		})
+		return got
+	}
+	clickDebugf("type: budget=%v len=%d", remaining().Round(time.Millisecond), len(text))
+	// Normal path (best-effort — errors swallowed; the fallbacks below recover). Use
+	// Playwright's own focus/clear/type: a raw `el.value=''` desyncs a framework-
+	// controlled input (React/Vue) so the subsequent keys do not register, which broke
+	// the modal / spa-jwt logins. Fill/Type do not wait for pointer "stability", so
+	// they still work on an animating field.
+	_ = short(2*time.Second, func() error { return el.Focus() })
+	_ = short(2*time.Second, func() error { return el.Fill("", pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
+	t0 := time.Now()
+	_ = short(2*time.Second, func() error {
 		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: &stepMs})
 	})
-	// Did the value land? Real key events silently fail on guarded inputs.
-	var got string
-	_ = short(func() error {
-		v, verr := el.Evaluate("el => el.value")
-		if s, ok := v.(string); ok {
-			got = s
-		}
-		return verr
-	})
-	if got == text {
+	clickDebugf("type: real-keys took=%v value=%q budgetLeft=%v", time.Since(t0).Round(time.Millisecond), readValue(), remaining().Round(time.Millisecond))
+	if readValue() == text {
 		return nil
 	}
-	// Fallback: un-guard with a real click, then set the value directly and fire
-	// the input/change events a framework needs to register it.
-	_ = short(func() error { return el.Click(pw.ElementHandleClickOptions{Force: &force, Timeout: &stepMs}) })
+	// Fallback A: NATIVE value setter + input/change, so a React/Vue-controlled input
+	// registers the change (a plain `el.value = v` is silently reverted). The events
+	// are UNTRUSTED, so a field that gates on isTrusted ignores them — fallback B
+	// then handles that. Quick (no actionability wait).
 	var jerr error
-	_ = short(func() error {
-		// Use the element's NATIVE value setter so a React/Vue-controlled input
-		// (which tracks its value through that setter) registers the change — a
-		// plain `el.value = v` is silently reverted by such frameworks.
+	_ = short(2*time.Second, func() error {
 		_, jerr = el.Evaluate(`(el, v) => {
 			el.focus();
 			var proto = (el.tagName === 'TEXTAREA') ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
@@ -395,8 +588,25 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 		}`, text)
 		return jerr
 	})
-	if jerr != nil {
-		return fmt.Errorf("camoufox: type: %w", jerr)
+	if readValue() == text {
+		return nil
+	}
+	// Fallback B: TRUSTED coordinate entry — focus by a real mouse click and type with
+	// the page keyboard (real key events, no actionability wait), mirroring go-rod's
+	// CDP typing. The only path that lands on a controlled field that commits only on
+	// trusted input, or that never settles for ElementHandle.Type because it animates
+	// every frame (the live bambulab field).
+	budget := remaining() - 2*time.Second // reserve budget for the submit click that follows
+	if budget > 3*time.Second {
+		budget = 3 * time.Second
+	}
+	clickDebugf("type: native value=%q -> coord budget=%v", readValue(), budget.Round(time.Millisecond))
+	if budget > 0 && !coordFallbackDisabled() {
+		cerr := p.coordType(ctx, el, text, budget)
+		clickDebugf("type: coord err=%v value=%q", cerr, readValue())
+		if cerr != nil && jerr != nil {
+			return fmt.Errorf("camoufox: type: %w", jerr)
+		}
 	}
 	return nil
 }

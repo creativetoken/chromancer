@@ -751,13 +751,15 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: &stepMs})
 	})
 	clickDebugf("type: real-keys took=%v landed=%s budgetLeft=%v", time.Since(t0).Round(time.Millisecond), landed(), remaining().Round(time.Millisecond))
-	if readValue() == text {
-		return nil
-	}
-	// Fallback A: Playwright's own Fill sets the value through the browser protocol
-	// (not page-JS), so camoufox's anti-detect prototype patching — which breaks the
-	// native-setter trick in fallback B with "'set value' ... does not implement
-	// interface HTMLInputElement" on the live bambulab code field — cannot block it.
+	// Canonicalise with Playwright's Fill EVEN WHEN the keystrokes appear to have
+	// landed. On a React-controlled input, real keystrokes can leave el.value correct
+	// while React's internal state is stale/partial — so a form submit sends a
+	// MISMATCHED value: live, the bambulab Confirm was enabled and clicked yet the
+	// fresh, correct-looking code was rejected. Fill sets the value through the browser
+	// protocol and fires a React-visible input event, forcing React's state to match.
+	// (It also recovers the camoufox anti-detect prototype-patching case that breaks
+	// the native setter in fallback B, and is a no-op risk when the field is already
+	// correct.)
 	ferr := short(3*time.Second, func() error { return el.Fill(text, pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
 	clickDebugf("type: fill err=%s landed=%s", errStr(ferr, text), landed())
 	if readValue() == text {

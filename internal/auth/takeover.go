@@ -329,14 +329,14 @@ func (a *Authenticator) escalateHuman(ctx context.Context, p browser.Page, rec *
 		// login, whose search box trips the strict detector's "identifier present"
 		// guard, and whose auth cookies did not register as strong evidence.)
 		st := mustPerceive(ctx, a, p)
-		f := Classify(st)
-		if f.Password == nil && a.base.URL != "" && st.URL != a.base.URL && !authWordRe.MatchString(st.Title) {
+		if a.looksPastLogin(st) {
 			a.trace.SuccessEvidence = []string{"operator_confirmed:" + st.URL}
 			a.trace.Add("authenticated after human handoff (operator-confirmed, off the login route): %s", st.URL)
 			return nil
 		}
 		// Record what the page looked like (cookie NAMES only, never values) so the
 		// failure — and why the strong signals missed — is diagnosable next time.
+		f := Classify(st)
 		cookieNames := ""
 		if cur, err := p.ExportState(ctx); err == nil {
 			var names []string
@@ -570,7 +570,31 @@ func (a *Authenticator) agentCheckLoggedIn(ctx context.Context, p browser.Page, 
 	if rec != nil {
 		xhrs = rec.PostLoginXHRs()
 	}
-	return SuccessDetector{}.IsAuthenticated(ctx, p, st, a.base, xhrs, true)
+	if ok, ev := (SuccessDetector{}).IsAuthenticated(ctx, p, st, a.base, xhrs, true); ok {
+		return true, ev
+	}
+	// The strict detector missed. The agent has been driving the sign-in, so a page
+	// that is clearly PAST the login flow (no visible password field, URL left the
+	// entry route, title is not an auth page) is logged in even when the strict
+	// signals — which key on specific cookie names, a /me XHR, or an authed-only
+	// element — don't match this site's shape (bambulab lands on its homepage, whose
+	// search box trips the "identifier present" guard). A false positive is caught
+	// downstream: the replay check marks such a session non-replayable and a later
+	// run logs in fresh.
+	if a.looksPastLogin(st) {
+		return true, []string{"off_login_route:" + st.URL}
+	}
+	return false, nil
+}
+
+// looksPastLogin reports that st is clearly a page AFTER the login flow: no visible
+// password field, the URL has left the entry route, and the title is not an auth
+// page. Weaker than SuccessDetector (no server-confirmed signal), so it is only
+// used with additional context — the agent having driven the sign-in, or an
+// operator confirming a handoff — with the replay check as the backstop.
+func (a *Authenticator) looksPastLogin(st perceive.State) bool {
+	f := Classify(st)
+	return f.Password == nil && a.base.URL != "" && st.URL != a.base.URL && !authWordRe.MatchString(st.Title)
 }
 
 // confirmAuthenticated re-perceives and runs success detection once (used after

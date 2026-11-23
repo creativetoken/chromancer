@@ -700,12 +700,23 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 		if err := ac.typeInto(ctx, vs.CodeField, res.Code, "otp"); err != nil {
 			return fetchFailed(err)
 		}
+		// Let the code field settle before submitting. A controlled OTP input may
+		// validate the code asynchronously (enable Confirm, fire a check), and
+		// clicking Confirm within the ~160ms it takes to re-perceive can submit
+		// before that completes — observed live as a fresh, correctly-entered code
+		// that the form then rejected.
+		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
 		f := Classify(mustPerceive(ctx, a, p))
 		if err := ac.submit(ctx, Fields{Submit: vs.Submit}, vs.CodeField); err != nil && f.Submit != nil {
 			if err2 := ac.click(ctx, f.Submit, "verify"); err2 != nil {
 				return fetchFailed(err2)
 			}
 		}
+		// After the submit, record any visible error/status so a REJECTED code (an
+		// "incorrect/expired code" message) is distinguishable in the trace from a
+		// submit that silently did not fire.
+		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+		a.probeVerifyMessage(ctx, p)
 	case verify.ResApproved:
 		a.trace.Add("verification: push approved")
 	}

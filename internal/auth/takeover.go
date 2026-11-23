@@ -439,6 +439,31 @@ func (a *Authenticator) saveOTPDebug(ctx context.Context, p browser.Page, note s
 		"clickables": clickables, "send_code_probe": sendProbe, "screenshot": shotPath})
 }
 
+// probeVerifyMessage logs any visible error/status text on the verification screen
+// after a submit (e.g. "incorrect code"), so the trace shows whether a submitted
+// code was REJECTED by the site vs. the submit not firing at all. Best-effort; it
+// never surfaces the code and never affects the flow.
+func (a *Authenticator) probeVerifyMessage(ctx context.Context, p browser.Page) {
+	v, err := p.Eval(ctx, `() => {
+		const out = [];
+		for (const el of document.querySelectorAll('[role="alert"], [aria-live="assertive"], [aria-live="polite"], .error, .err, .ant-form-item-explain-error, .ant-message, .el-message, [class*="error" i], [class*="invalid" i]')) {
+			const t = (el.innerText || el.textContent || '').trim();
+			if (t && t.length <= 140) out.push(t);
+		}
+		const body = (document.body && document.body.innerText) || '';
+		const m = body.match(/[^\n]*\b(incorrect|invalid|expired|wrong|does not match|too many|try again|resend)\b[^\n]*/i);
+		if (m) out.push(m[0].trim());
+		return out.slice(0, 4).join(' | ').slice(0, 300);
+	}`)
+	if err != nil {
+		return
+	}
+	if msg := strings.TrimSpace(v.Str()); msg != "" {
+		a.trace.Add("verification: page message after submit: %q", msg)
+		a.log("verify_message", map[string]any{"message": msg})
+	}
+}
+
 // agentVerifyBudget is the verification window the agent gets for entering a
 // code/link. It is at least 45s, and never shorter than the configured
 // VerifyTimeout, so the short escalation-trigger timeout does not starve the

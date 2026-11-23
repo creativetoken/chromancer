@@ -91,8 +91,11 @@ Environment:
 }
 
 func cmdCreds(ctx context.Context, args []string) error {
+	if len(args) >= 1 && args[0] == "migrate" {
+		return cmdCredsMigrate(ctx)
+	}
 	if len(args) < 1 || args[0] != "put" {
-		return fmt.Errorf("usage: creds put --target URL --account NAME --username U --password P")
+		return fmt.Errorf("usage: creds put --target URL --account NAME --username U --password P\n   or: creds migrate   (one-time: legacy encrypted creds.enc -> accounts.yaml; needs AGENTBROWSER_KEY)")
 	}
 	fs := flag.NewFlagSet("creds put", flag.ContinueOnError)
 	target := fs.String("target", "", "app root URL")
@@ -117,6 +120,48 @@ func cmdCreds(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("stored credentials for %s (target %s)\n", *account, *target)
+	return nil
+}
+
+// cmdCredsMigrate is a one-time move of the legacy per-account encrypted
+// creds.enc files into the plaintext accounts.yaml. It needs AGENTBROWSER_KEY
+// (the old key) to read the encrypted files; afterwards the key is no longer
+// required and can be dropped.
+func cmdCredsMigrate(ctx context.Context) error {
+	cfg := config.Default()
+	key, err := identity.KeyFromEnv()
+	if err != nil {
+		return fmt.Errorf("creds migrate needs the old key: %w", err)
+	}
+	src, err := identity.NewFileStore(cfg.Workspace, key)
+	if err != nil {
+		return err
+	}
+	dst, err := identity.NewYAMLStore(cfg.CredsFile)
+	if err != nil {
+		return err
+	}
+	accounts, err := src.List(ctx, "")
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, a := range accounts {
+		// List blanks secrets, so fetch the full credentials per account.
+		creds, err := src.GetCredentials(ctx, a.ID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", a.ID, err)
+			continue
+		}
+		if err := dst.PutCredentials(ctx, a.Target, a.ID, creds); err != nil {
+			return err
+		}
+		if prof, err := src.GetProfile(ctx, a.ID); err == nil && len(prof.Fields) > 0 {
+			_ = dst.PutProfile(ctx, a.ID, prof)
+		}
+		n++
+	}
+	fmt.Printf("migrated %d account(s) into %s\n", n, cfg.CredsFile)
 	return nil
 }
 

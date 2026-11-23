@@ -1,0 +1,26 @@
+# Per-account credentials — PLAINTEXT. Copy this to your credentials file and edit.
+#
+# Default location: <workspace>/accounts.yaml  (i.e. .workspace/accounts.yaml,
+# which is gitignored). Override with AGENTBROWSER_CREDS=/path/to/accounts.yaml.
+#
+# No AGENTBROWSER_KEY is needed. Each value is either a literal or a ${ENV_VAR}
+# reference resolved from the environment at read time — so real secrets can live
+# in .env.live and be referenced here, or you can just type them in.
+#
+# Then run:  agentbrowser auth --account <id> --mode login \
+#              --auth-driver agent --login-url <login URL>
+
+accounts:
+  bambulab:
+    target:    https://bambulab.com
+    username:  you@example.com
+    password:  ${BAMBU_PASSWORD}     # resolved from the environment
+    totp_seed: ""                    # base32 TOTP secret, if the site uses TOTP
+    phone:     ""                    # E.164, if the site uses SMS
+
+  symphony:
+    target:   https://hackerone.on.symphony.com
+    username: you@example.com
+    password: hunter2                # a literal value works too
+    profile:                         # optional incidental signup/profile fields
+      name: ""

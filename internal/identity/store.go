@@ -3,6 +3,7 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -264,8 +265,17 @@ func (s *FileStore) List(_ context.Context, target string) ([]Account, error) {
 	return out, nil
 }
 
-// Encrypt seals plaintext with secretbox (nonce prefixed).
+// plainMagic prefixes a file written WITHOUT a key — encryption is optional now,
+// so a nil key means the payload is stored verbatim. The marker lets Decrypt tell
+// a plaintext file from a legacy secretbox one (which has no such prefix).
+var plainMagic = []byte("PLN1")
+
+// Encrypt seals plaintext with secretbox (nonce prefixed), or — when key is nil —
+// writes the plaintext verbatim behind a marker (encryption disabled).
 func Encrypt(key *[32]byte, plain []byte) ([]byte, error) {
+	if key == nil {
+		return append(append([]byte{}, plainMagic...), plain...), nil
+	}
 	var nonce [24]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("identity: nonce: %w", err)
@@ -274,8 +284,16 @@ func Encrypt(key *[32]byte, plain []byte) ([]byte, error) {
 	return out, nil
 }
 
-// Decrypt opens a secretbox payload produced by Encrypt.
+// Decrypt opens a payload produced by Encrypt. A plaintext (PLN1) payload is
+// returned verbatim regardless of key; a legacy secretbox payload needs the key it
+// was sealed with (used only when reading pre-migration files with a key set).
 func Decrypt(key *[32]byte, data []byte) ([]byte, error) {
+	if bytes.HasPrefix(data, plainMagic) {
+		return data[len(plainMagic):], nil
+	}
+	if key == nil {
+		return nil, ErrWrongKey
+	}
 	if len(data) < 24 {
 		return nil, errors.New("identity: ciphertext too short")
 	}

@@ -21,28 +21,40 @@ installed, go-rod downloads one on first run.
 
 ## Quick start
 
-Build the command, generate a key, and start the test lab in the background:
+Build the command and start the test lab in the background:
 
 ```sh
 go build -o bin/agentbrowser ./cmd/agentbrowser
-export AGENTBROWSER_KEY=$(bin/agentbrowser newkey)
 make lab &   # mock apps on http://127.0.0.1:8089
 ```
 
-Store credentials, log in, and print the session:
+Provide credentials in a plaintext YAML (default `.workspace/accounts.yaml`,
+gitignored; override with `AGENTBROWSER_CREDS`). Copy `configs/accounts.example.yaml`
+and edit — no key needed. Values may be literals or `${ENV}` references:
+
+```yaml
+accounts:
+  alice:
+    target:   http://127.0.0.1:8089/simple/
+    username: alice@example.com
+    password: 'correct horse'       # or ${ALICE_PASSWORD}
+```
+
+Then log in and print the session:
 
 ```sh
-bin/agentbrowser creds put --target http://127.0.0.1:8089/simple/ \
-  --account alice --username alice@example.com --password 'correct horse'
 bin/agentbrowser auth --account alice --login-url http://127.0.0.1:8089/simple/login
 bin/agentbrowser export-session --account alice
 ```
 
-`auth` looks up the target from the stored credentials, so you pass `--target` once, to `creds put`. The password above is the lab's test password.
+`auth` looks up the target from the account entry. The password above is the lab's
+test password. (`agentbrowser creds put --target URL --account NAME --username U
+--password P` still works — it just writes the same YAML.)
 
 ## Usage
 
-Store credentials for an account (add `--totp-seed` for TOTP 2FA):
+Add an account by editing `.workspace/accounts.yaml` (add `totp_seed:` for TOTP 2FA,
+`phone:` for SMS), or with the CLI:
 
 ```sh
 agentbrowser creds put --target URL --account NAME --username U --password P
@@ -92,7 +104,8 @@ Everything is flags and environment variables; there is no config file.
 
 | Variable | Meaning |
 |---|---|
-| `AGENTBROWSER_KEY` | Required. base64 of 32 random bytes; encrypts stored credentials and sessions. `agentbrowser newkey` prints one. |
+| `AGENTBROWSER_CREDS` | Plaintext accounts YAML (default `<workspace>/accounts.yaml`). See `configs/accounts.example.yaml`. |
+| `AGENTBROWSER_KEY` | Optional. base64 of 32 random bytes. When set, the saved session (`session.enc`) and mailbox tokens are encrypted; when unset they are plaintext. Credentials no longer use it. `agentbrowser newkey` prints one; `agentbrowser creds migrate` imports legacy encrypted creds into the YAML. |
 | `AGENTBROWSER_WORKSPACE` | Where accounts and saved files live (default `.workspace`). |
 | `AGENTBROWSER_BACKEND` | Browser engine: `chromium` (default) or `camoufox` (anti-detect Firefox, Linux + Xvfb — see [docs/CAMOUFOX.md](docs/CAMOUFOX.md)). Pin per host with `AGENTBROWSER_BACKEND_TARGETS="host=camoufox,…"`. |
 | `AGENTBROWSER_HEADFUL` | Set to `1` to show the browser window. |

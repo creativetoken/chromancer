@@ -74,11 +74,20 @@ type App struct {
 
 // New builds an App from config, reading the store key from the environment.
 func New(cfg config.Config) (*App, error) {
-	key, err := identity.KeyFromEnv()
-	if err != nil {
-		return nil, err
+	// Credentials come from a plaintext YAML file the operator edits directly.
+	// Encryption is optional: AGENTBROWSER_KEY is read ONLY when set (to open
+	// legacy encrypted session/mailbox files, or to re-enable encryption on
+	// purpose); otherwise key stays nil and session.enc / mailbox tokens are
+	// written in plaintext.
+	var key *[32]byte
+	if os.Getenv(identity.KeyEnv) != "" {
+		k, err := identity.KeyFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		key = k
 	}
-	creds, err := identity.NewFileStore(cfg.Workspace, key)
+	creds, err := identity.NewYAMLStore(cfg.CredsFile)
 	if err != nil {
 		return nil, err
 	}

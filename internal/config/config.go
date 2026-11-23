@@ -36,6 +36,10 @@ type Config struct {
 	// overriding Backend for that host (host matched case-insensitively).
 	Backend         string
 	BackendByTarget map[string]string
+
+	// CredsFile is the plaintext YAML file holding per-account credentials
+	// (AGENTBROWSER_CREDS; default <Workspace>/accounts.yaml).
+	CredsFile string
 }
 
 // BackendFor returns the backend to use for a target URL/host: a per-target
@@ -126,6 +130,10 @@ func Default() Config {
 	if ws == "" {
 		ws = ".workspace"
 	}
+	credsFile := os.Getenv("AGENTBROWSER_CREDS")
+	if credsFile == "" {
+		credsFile = filepath.Join(ws, "accounts.yaml")
+	}
 	prov := os.Getenv("AGENTBROWSER_LLM")
 	if prov == "" {
 		switch {
@@ -151,6 +159,7 @@ func Default() Config {
 		StepLimit:       40,
 		Backend:         backendDefault(),
 		BackendByTarget: parseBackendTargets(os.Getenv("AGENTBROWSER_BACKEND_TARGETS")),
+		CredsFile:       credsFile,
 	}
 }
 

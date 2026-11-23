@@ -572,41 +572,56 @@ func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) e
 	if readValue() == text {
 		return nil
 	}
-	// Fallback A: NATIVE value setter + input/change, so a React/Vue-controlled input
-	// registers the change (a plain `el.value = v` is silently reverted). The events
-	// are UNTRUSTED, so a field that gates on isTrusted ignores them — fallback B
-	// then handles that. Quick (no actionability wait).
+	// Fallback A: Playwright's own Fill sets the value through the browser protocol
+	// (not page-JS), so camoufox's anti-detect prototype patching — which breaks the
+	// native-setter trick in fallback B with "'set value' ... does not implement
+	// interface HTMLInputElement" on the live bambulab code field — cannot block it.
+	ferr := short(3*time.Second, func() error { return el.Fill(text, pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
+	clickDebugf("type: fill err=%v value=%q", ferr, readValue())
+	if readValue() == text {
+		return nil
+	}
+	// Fallback B: NATIVE value setter + input/change, so a React/Vue-controlled input
+	// registers the change (a plain `el.value = v` is silently reverted). Wrapped in
+	// try/catch so camoufox's patched prototype cannot throw and mask the later steps.
 	var jerr error
 	_ = short(2*time.Second, func() error {
-		_, jerr = el.Evaluate(`(el, v) => {
+		_, jerr = el.Evaluate(`(el, v) => { try {
 			el.focus();
 			var proto = (el.tagName === 'TEXTAREA') ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
 			var d = Object.getOwnPropertyDescriptor(proto, 'value');
 			if (d && d.set) { d.set.call(el, ''); d.set.call(el, v); } else { el.value = ''; el.value = v; }
 			el.dispatchEvent(new Event("input", { bubbles: true }));
 			el.dispatchEvent(new Event("change", { bubbles: true }));
-		}`, text)
+		} catch (e) {} }`, text)
 		return jerr
 	})
+	clickDebugf("type: native err=%v value=%q", jerr, readValue())
 	if readValue() == text {
 		return nil
 	}
-	// Fallback B: TRUSTED coordinate entry — focus by a real mouse click and type with
+	// Fallback C: TRUSTED coordinate entry — focus by a real mouse click and type with
 	// the page keyboard (real key events, no actionability wait), mirroring go-rod's
-	// CDP typing. The only path that lands on a controlled field that commits only on
-	// trusted input, or that never settles for ElementHandle.Type because it animates
-	// every frame (the live bambulab field).
+	// CDP typing. The last resort for a field that none of the above can set.
 	budget := remaining() - 2*time.Second // reserve budget for the submit click that follows
 	if budget > 3*time.Second {
 		budget = 3 * time.Second
 	}
-	clickDebugf("type: native value=%q -> coord budget=%v", readValue(), budget.Round(time.Millisecond))
+	clickDebugf("type: -> coord budget=%v", budget.Round(time.Millisecond))
 	if budget > 0 && !coordFallbackDisabled() {
 		cerr := p.coordType(ctx, el, text, budget)
 		clickDebugf("type: coord err=%v value=%q", cerr, readValue())
-		if cerr != nil && jerr != nil {
-			return fmt.Errorf("camoufox: type: %w", jerr)
+		if readValue() == text {
+			return nil
 		}
+		// Nothing landed the value. Report the most specific failure so the trace is
+		// honest about where it stopped.
+		if cerr != nil {
+			return fmt.Errorf("camoufox: type: %w", cerr)
+		}
+	}
+	if jerr != nil {
+		return fmt.Errorf("camoufox: type: %w", jerr)
 	}
 	return nil
 }

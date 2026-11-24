@@ -143,7 +143,7 @@ benchmark the CAPTCHA solver chain.
 
 ## Security
 
-A session bundle and the login recording contain live credentials and tokens. They are written only inside the workspace, encrypted at rest, and never written to the audit log.
+A session bundle and the login recording contain live credentials and tokens. They are written only inside the workspace and never written to the audit log. Credentials live in a plaintext YAML you control (`accounts.yaml`, `0600`); the saved session (`session.enc`) and mailbox tokens are encrypted at rest only when `AGENTBROWSER_KEY` is set, and plaintext otherwise. Keep the workspace private, and set `AGENTBROWSER_KEY` if you need encryption at rest for the session and token files.
 
 ## Further reading
 

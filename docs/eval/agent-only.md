@@ -193,6 +193,37 @@ camoufox all pass with `canvas-signin` skipped). Build/vet/lint + unit green.
 | fresh `/en-gb/sign-in` #4 (operator) | agent | **failed: handoff_timeout (OTP entry)** | Much further this time: cookies dismissed, `fill_login_form → filled_login`, submit, then the **email-OTP step** appeared and the code **was fetched** (4× "email sent to …") — but `enter_verification` failed 4× with a "field clear" error. `screenshots=0` (the form was readable, so no escalation needed). **Root cause + fix below.** |
 | fresh `/en-gb/sign-in` #5 (operator) | agent | **failed: handoff_timeout (OTP entry, "timed out")** | Same shape as #4 but the OTP error became "timed out" (3 attempts). The first OTP fix left the `Type` step bounded only by the whole ~20s verify budget, so a guarded field blocked there before the fallback ran. Fixed: each `TypeInto` step is now capped at ~3s (rodbackend parity) and the fallback uses the native value setter (React-safe). |
 | fresh `/en-gb/sign-in` #6 (operator) | agent | **failed: handoff_timeout (OTP never sent)** — ROOT CAUSE | The `otp-debug` screenshot revealed it: bambulab's modal has a **"Send code" button inside the code field**, and the field was **empty** every attempt — bambulab doesn't email a code until "Send code" is clicked, and the agent never clicked it (it's a React `<span onClick>` with no `onclick`/role/href, so the DOM perceiver can't see it). `GetCode` kept waiting for a code that was never sent → "timed out". **Not a gate — a perception gap.** |
+| fresh `/en-gb/sign-in` #7 (operator) | agent | **done (operator-confirmed)** — FIRST SUCCESS | The autonomous OTP fetch timed out (no code in the window), so it handed off; the operator logged in and pressed Enter, and the handoff now **recognizes** it — strict detection settles+retries, then accepts a page past the login flow as `operator_confirmed:https://bambulab.com/en-gb`. `result=done`, session captured. `replayable:false body_mismatch` (success came from the URL/no-password heuristic, not a captured strong auth signal). |
+| fresh `/en-gb/sign-in` #8 (operator) | agent | **done (autonomous, no handoff)** | The agent entered the OTP, reached the homepage, and **self-confirmed** — `agentCheckLoggedIn` now accepts a page past the login flow as `off_login_route:https://bambulab.com/en-gb`, so a successful agent login no longer hands off. `result=done`. Operator noticed **two OTP emails**; root-caused and fixed (findings below). |
+
+**Live-run #7–#8 — LOGIN COMPLETES (`result=done`).** Two fixes closed the gap
+between "the agent logs in" and "the run reports success":
+
+- **#7 handoff recognition (fixed):** a login finished in the noVNC takeover was
+  lost to `agent_takeover_failed` because success was gated only on the strict
+  `SuccessDetector`, which bambulab's homepage defeats (its search box trips the
+  "identifier present" guard; the auth cookie didn't register as strong). Fix:
+  `escalateHuman` settles + retries the strict check for ~12s, then accepts a page
+  clearly past the login flow (no visible password + URL left the entry route +
+  non-auth title) as `operator_confirmed:<url>`.
+- **#8 autonomous self-confirm (fixed):** the same homepage defeat made the agent
+  hand off *after it had already logged in*. Fix: `agentCheckLoggedIn` applies the
+  same `looksPastLogin` check after the strict one and accepts `off_login_route:<url>`,
+  so a successful agent login finishes `done` with no handoff. Negatives stay safe —
+  camoufox `WrongPassword` + `BotWallFails` still fail. See docs/DECISIONS.md
+  (2026-11-24). Caveat: both paths yield `replayable:false body_mismatch` (no
+  captured strong auth signal), so session auto-restore for these logins is future
+  work.
+- **#8 two OTP emails (fixed):** bambulab auto-sends the code on submit and shows
+  only a "Resend" link; when the 8s grace poll expired on the slow camoufox+relay
+  path, the `clickSendCodeJS` fallback matched "Resend" and clicked it → a redundant
+  second email. Fix: `clickSendCodeJS` matches only first-delivery triggers and never
+  a resend. One email per login; `verify-sendcode`/`verify-autosend`/`ResendOTP` e2e
+  green. See docs/DECISIONS.md (2026-11-24).
+
+Remaining live variable: the *fully-autonomous* path still depends on the code
+arriving within the verify window (mail-relay latency / per-account throttle — not
+code-controllable); when it doesn't, the handoff path (now recognized) completes it.
 
 **Live-run #6 finding (fixed — likely the real blocker all along):** the
 verification flow now triggers code delivery before fetching — it clicks a

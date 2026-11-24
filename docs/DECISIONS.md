@@ -511,3 +511,60 @@
   (camoufox-only; animating + trusted-gated modal), proven red→green via the
   kill-switch. go-rod's own `WaitStableRAF` would hang on a perpetually-animating
   element — a pre-existing rodbackend trait real sites do not trigger.
+- 2026-11-23 · **Perceiver clears every `data-ab-handle` before re-stamping each
+  perception (handle aliasing was the root "wrong element" bug).** `walkJS` stamps
+  handle numbers that are REUSED per perception but never cleared the old ones, so a
+  dismissed element (e.g. a zero-size cookie-consent button) kept a live handle whose
+  number now also meant a real control; `querySelector('[data-ab-handle="N"]')`
+  returned the stale element in document order, so clicks/types landed on the wrong
+  node (observed live: the Confirm handle resolved to the dead "Reject All" consent
+  button). Fix: clear all `data-ab-handle` across the document and open shadow roots
+  at the start of each perception, then re-stamp. Backend-neutral; this is the TRUE
+  fix behind the camoufox "wrong element" symptoms that the per-action real-element
+  fallbacks (`coordTypeRealInput`/`coordClickRealTarget`) had been working around
+  (kept as harmless backups). · alt: per-element fallbacks only (treats the symptom).
+- 2026-11-24 · **Plaintext YAML credential store; `AGENTBROWSER_KEY` no longer
+  required.** The per-account secretbox-encrypted `creds.enc` (keyed by
+  `AGENTBROWSER_KEY`) was friction — adding an account meant running the CLI with a
+  key set, and the project already keeps plaintext secrets in `.env.live`. Decision:
+  credentials come from one plaintext YAML the user edits directly
+  (`<workspace>/accounts.yaml`, override `AGENTBROWSER_CREDS`); values are literals
+  or `${ENV}` refs resolved on read (Put round-trips keep the `${ENV}` form). New
+  `identity.YAMLStore` implements the existing `CredentialStore` interface, so
+  `creds put` and the account-switch flow still work. Encryption is dropped
+  everywhere, not just creds: `identity.Encrypt(nil,…)` writes a `PLN1`-prefixed
+  plaintext (session.enc + mailbox tokens are plaintext when no key is set) and
+  still reads/writes secretbox when a key IS set, so legacy files remain readable;
+  `creds migrate` imports them once. · alt: keep encryption with a default key
+  (still requires key management for no security benefit on a single-user workstation).
+- 2026-11-24 · **Human handoff recognizes an operator-completed login, and the
+  agent self-confirms an autonomous login past the login flow.** A login finished in
+  the noVNC takeover (operator) — and a login the agent itself completed — reached
+  bambulab's homepage but was lost to `agent_takeover_failed`, because success was
+  gated only on the strict `SuccessDetector`, which that homepage defeats (its search
+  box trips the "identifier present" guard; the post-login cookie didn't register as
+  a strong signal). Decision: after the strict check, accept a page clearly PAST the
+  login flow via shared helper `looksPastLogin` (no visible password field + URL left
+  the entry route + title is not an auth word). `escalateHuman` settles + retries the
+  strict check for ~12s, then accepts it as `operator_confirmed:<url>`;
+  `agentCheckLoggedIn` accepts it autonomously as `off_login_route:<url>` so a
+  successful agent login no longer hands off. The replay check is the backstop (such
+  a session is `replayable:false body_mismatch` and a later run logs in fresh), and
+  the negatives stay safe — camoufox WrongPassword + BotWallFails still fail (they
+  keep a visible password field / stay on the block page). · alt: widen
+  `SuccessDetector`'s cookie/authed-element heuristics to bambulab's shape (brittle,
+  per-site, and still misses the general "homepage after login" case).
+- 2026-11-24 · **The "Send code" JS fallback never auto-clicks a "Resend" control
+  (one OTP email per login on auto-send sites).** bambulab auto-sends the OTP on
+  login submit and then shows only a "Resend" link; `doVerify` grace-polls 8s for the
+  auto-sent code, and on a slow backend (camoufox + the mail relay) that window
+  expires, after which the perceiver-bypassing fallback `clickSendCodeJS` — whose
+  regex included `resend` — matched and clicked the "Resend" link, mailing a
+  redundant second code and burning the server's re-send cooldown. Decision:
+  `clickSendCodeJS` matches only FIRST-DELIVERY phrasing (send/get/request/email/text
+  + "code") and explicitly skips resend phrasing, mirroring `sendCodeRe` in
+  `DetectVerifyStep`. A grace-poll timeout no longer resends — the in-flight auto-sent
+  code is still matched when it arrives (`*since` is never advanced) — and a genuine
+  resend stays the agent's explicit `ResendVerification` choice. · alt: lengthen the
+  grace window (just trades a redundant email for a slower flow; relay latency is
+  unbounded). Chromium e2e green: ResendOTP, verify-sendcode, verify-autosend.

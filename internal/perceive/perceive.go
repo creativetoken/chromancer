@@ -256,6 +256,18 @@ const walkJS = `(base, frameIndex) => {
   };
   const els = [];
   collect(document, els);
+  // Clear every stale data-ab-handle (document + open shadow roots) before stamping
+  // this perception. Handle numbers are reused per perceive, and an element that has
+  // since been dismissed or hidden — e.g. a zero-size cookie-consent button — keeps
+  // its old attribute otherwise, so a reused number N then matches TWO elements and
+  // [data-ab-handle="N"] resolves to the stale one (document order), pointing a
+  // click/type at the wrong node (the live bambulab Confirm resolved to a dismissed
+  // "Reject All" button this way).
+  const clearHandles = (root) => {
+    for (const e of root.querySelectorAll('[data-ab-handle]')) e.removeAttribute('data-ab-handle');
+    for (const host of root.querySelectorAll('*')) { if (host.shadowRoot) clearHandles(host.shadowRoot); }
+  };
+  clearHandles(document);
   const seen = new Set();
   const txt = (el) => (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
   const labelFor = (el) => {

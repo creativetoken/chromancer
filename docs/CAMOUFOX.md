@@ -82,8 +82,14 @@ account's Xvfb display is exposed read/write through `x11vnc` + noVNC, behind a
 small loopback reverse proxy. That proxy requires the one-time handoff token on
 **every** request, including the WebSocket upgrade the VNC client opens (token in
 the query string, an `X-Handoff-Token` header, or a `handoff.<token>` WebSocket
-subprotocol). `needs_human.view_url` points at this proxy. Without a valid token
-every request gets a flat `401` and never reaches the VNC upstream.
+subprotocol). On the first authenticated request the proxy sets an `HttpOnly`
+`handoff_token` cookie so noVNC's relative-URL sub-resources (CSS/JS/images), which
+can't carry `?token=`, authenticate too — without it the page loads but renders
+broken. `needs_human.view_url` points at this proxy. Without a valid token (or
+cookie) every request gets a flat `401` and never reaches the VNC upstream. From a
+container, publish the port and set `AGENTBROWSER_HANDOFF_BIND=0.0.0.0:<port>` +
+`AGENTBROWSER_HANDOFF_ADVERTISE=127.0.0.1` so the link opens from the host (see
+`scripts/live-bambulab.sh`).
 
 ## Known differences from chromium
 

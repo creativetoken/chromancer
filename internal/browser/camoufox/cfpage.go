@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,115 @@ import (
 
 	"github.com/creativetoken/chromancer/internal/browser"
 )
+
+// clickDebugf emits click/type diagnostics to stderr when AGENTBROWSER_CLICK_DEBUG
+// is set. It is a no-op otherwise, so it is free on the normal path. The output
+// (per-step durations, errors, and the target's live actionability) is what turns
+// a reproduction — in the lab or in a single instrumented live run — into a
+// definitive diagnosis instead of a guess.
+func clickDebugf(format string, a ...interface{}) {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[click-debug] "+format+"\n", a...)
+}
+
+// errStr renders an error for a debug line with a secret scrubbed out — Playwright
+// echoes the argument it was given (e.g. `fill("867730")`) into its error text, so
+// the typed OTP/password must be removed before logging.
+func errStr(err error, secret string) string {
+	if err == nil {
+		return "<nil>"
+	}
+	s := err.Error()
+	if secret != "" {
+		s = strings.ReplaceAll(s, secret, "<redacted>")
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 { // drop Playwright's multi-line call log
+		s = s[:i]
+	}
+	return s
+}
+
+// dumpOTPDOM returns a structural snapshot (NO values) of the element the type
+// handle points to and every candidate code input on the page — tag, id, name,
+// autocomplete, box, shadow-root membership — so a failed OTP entry shows the REAL
+// DOM shape instead of being guessed at. Best-effort; empty string when debug off.
+func dumpOTPDOM(ctx context.Context, p *cfPage, el pw.ElementHandle) string {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return ""
+	}
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out string
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			function info(n){ if(!n) return null; var r=n.getBoundingClientRect();
+				return {tag:n.tagName, id:n.id||null, name:n.getAttribute&&n.getAttribute('name'),
+					type:n.getAttribute&&n.getAttribute('type'), ac:n.getAttribute&&n.getAttribute('autocomplete'),
+					handle:n.getAttribute&&n.getAttribute('data-ab-handle'),
+					w:Math.round(r.width), h:Math.round(r.height), x:Math.round(r.left), y:Math.round(r.top),
+					inShadow:(n.getRootNode&&n.getRootNode()!==document)}; }
+			var handle = info(el);
+			var parents=[]; var p=el.parentElement; for(var i=0;i<4&&p;i++){ parents.push(info(p)); p=p.parentElement; }
+			var cand = [].slice.call(document.querySelectorAll('input[autocomplete="one-time-code"], input[name="code"], input[inputmode="numeric"], input[type="text"]')).map(info);
+			return JSON.stringify({handle:handle, parents:parents, candidates:cand});
+		}`)
+		if err != nil {
+			out = "dump-err: " + err.Error()
+			return nil
+		}
+		if s, ok := v.(string); ok {
+			out = s
+		}
+		return nil
+	})
+	return out
+}
+
+// coordFallbackDisabled reports whether the trusted coordinate click/type fallback
+// is turned off. It defaults ON; AGENTBROWSER_DISABLE_COORD_FALLBACK=1 reverts to
+// the handle-only behaviour (a kill-switch, and the lever that makes the backend
+// trusted-modal e2e deterministically reproduce the pre-fix failure).
+func coordFallbackDisabled() bool {
+	return os.Getenv("AGENTBROWSER_DISABLE_COORD_FALLBACK") == "1"
+}
+
+// probeState returns a one-line snapshot of el's live actionability: whether it
+// is still attached, its rect, whether it is the hit-test target at its own
+// centre (an overlay intercepting pointer events is the classic actionable-click
+// killer), and whether it is disabled. Best-effort; never blocks more than ~1s.
+func probeState(ctx context.Context, p *cfPage, el pw.ElementHandle) string {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return ""
+	}
+	sctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	var out string
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			if (!el.isConnected) return {attached:false};
+			const r = el.getBoundingClientRect();
+			const cx = r.left + r.width/2, cy = r.top + r.height/2;
+			const top = document.elementFromPoint(cx, cy);
+			return {
+				attached:true, w:Math.round(r.width), h:Math.round(r.height),
+				x:Math.round(cx), y:Math.round(cy),
+				disabled: !!el.disabled,
+				hitSelf: top === el,
+				hit: top ? (top.tagName+(top.id?('#'+top.id):'')) : null,
+			};
+		}`)
+		if err != nil {
+			out = "probe-err: " + err.Error()
+			return nil
+		}
+		b, _ := json.Marshal(v)
+		out = string(b)
+		return nil
+	})
+	return out
+}
 
 // cfValue wraps a Playwright Evaluate result as a neutral browser.Value.
 type cfValue struct{ v interface{} }
@@ -262,16 +372,307 @@ func (p *cfPage) WaitElementReady(ctx context.Context, e browser.Element, stable
 	return nil
 }
 
+// Click clicks an element robustly, mirroring the rodbackend contract: a real
+// Playwright click first (full mouse/pointer events, waits for the target to be
+// actionable — visible, stable, enabled, unobscured), and when that cannot land,
+// a JS click dispatched ON THE ELEMENT ITSELF. The element-level fallback ignores
+// overlays and actionability gating and always hits the intended element, so for
+// a submit/confirm button it still triggers the form submit.
+//
+// Two things this gets right that an earlier version did not:
+//   - Budget: callers bound a click to a short deadline (actor.bound ~ 8s). The
+//     actionable attempt is capped at a slice of that budget so the JS fallback is
+//     always reachable; an earlier version let the first attempt consume the whole
+//     8s, which surfaced as the bambulab Confirm "click: context deadline exceeded".
+//   - No Force click: a Playwright Force click skips actionability but still
+//     dispatches a real mouse event at a POINT, so over a transparent overlay it
+//     "succeeds" by clicking the overlay — a false positive that never submits the
+//     form. The element-level JS click cannot mis-target like that.
 func (p *cfPage) Click(ctx context.Context, e browser.Element) error {
 	el, err := asHandle(e)
 	if err != nil {
 		return err
 	}
-	_ = el.ScrollIntoViewIfNeeded()
-	if err := p.run(ctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: timeoutMs(ctx)}) }); err != nil {
-		return fmt.Errorf("camoufox: click: %w", err)
+	p.scrollIntoView(ctx, el)
+
+	remaining := func() time.Duration {
+		if dl, ok := ctx.Deadline(); ok {
+			return time.Until(dl)
+		}
+		return 8 * time.Second
 	}
-	return nil
+	if remaining() <= 0 {
+		return fmt.Errorf("camoufox: click: %w", context.DeadlineExceeded)
+	}
+	clickDebugf("click: budget=%v state=%s", remaining().Round(time.Millisecond), probeState(ctx, p, el))
+
+	// 1) Playwright's actionable click — the clean path for a normal control. Capped
+	//    short (≤3s, always reserving budget) so an animating / never-"stable" target
+	//    cannot burn the whole budget before the trusted coordinate fallback runs.
+	primary := remaining() - 3*time.Second
+	if primary > 3*time.Second {
+		primary = 3 * time.Second
+	}
+	if primary > 0 {
+		sctx, cancel := context.WithTimeout(ctx, primary)
+		ms := float64(primary / time.Millisecond)
+		t0 := time.Now()
+		cerr := p.run(sctx, func() error { return el.Click(pw.ElementHandleClickOptions{Timeout: &ms}) })
+		cancel()
+		clickDebugf("click: actionable took=%v err=%v", time.Since(t0).Round(time.Millisecond), cerr)
+		if cerr == nil {
+			return nil
+		}
+	}
+
+	// If the handle has no bounding box it is a zero-size wrapper (the live bambulab
+	// verify modal resolves the Confirm/code handles to <div> wrappers). The
+	// handle-based fallbacks cannot help — a JS el.click() on the wrapper is a no-op
+	// that still reports success, and a coordinate click has no point — so find the
+	// REAL visible control by the handle's label/text and click that.
+	if !coordFallbackDisabled() && !p.elementHasBox(ctx, el) {
+		clickDebugf("click: handle has no box -> real-target dom=%s", dumpClickDOM(ctx, p, el))
+		if p.coordClickRealTarget(ctx, el) {
+			clickDebugf("click: real-target landed=yes")
+			return nil
+		}
+		clickDebugf("click: real-target landed=no")
+	}
+
+	// The actionable click failed — obscured, or (the live bambulab case) the modal
+	// animates every frame so the target is never "stable". Fall through to two
+	// dispatches that do NOT wait on actionability. Both are best-effort: neither can
+	// confirm the page reacted, so the caller re-perceives and retries if the form
+	// did not advance. We run both because each covers a different trap.
+	var landed bool
+	var lastErr error
+
+	// 2) Element-level JS click — dispatches ON the element, ignoring hit-testing, so
+	//    it reaches a target under a transparent overlay (the verify-autosend case)
+	//    where a coordinate click would hit the overlay. The event is UNTRUSTED, so a
+	//    trusted-event-gated handler ignores it; step 3 covers that. Run FIRST so that
+	//    the trusted coordinate click is the LAST dispatch — a navigation it triggers
+	//    must not be raced (and aborted) by a following el.Evaluate. If this click DOES
+	//    submit (overlay on an idle page), step 3 then finds the element detached and
+	//    simply no-ops.
+	if rem := remaining(); rem > 0 {
+		sctx, cancel := context.WithTimeout(ctx, rem)
+		t := time.Now()
+		jerr := p.run(sctx, func() error { _, e := el.Evaluate(`el => el.click()`); return e })
+		cancel()
+		clickDebugf("click: js-fallback took=%v err=%v", time.Since(t).Round(time.Millisecond), jerr)
+		if jerr == nil {
+			landed = true
+		} else {
+			lastErr = jerr
+		}
+	}
+
+	// 3) Trusted coordinate click at the element's centre — a real browser mouse event
+	//    (move+down+up), no actionability wait, no page-JS, mirroring go-rod's CDP
+	//    click on the chromium backend (which logs into bambulab). The one path that
+	//    lands on an animating control whose handler requires a TRUSTED event
+	//    (isTrusted) — the live camoufox failure. LAST so the navigation it triggers is
+	//    not aborted by any following dispatch.
+	if rem := remaining(); rem > 0 && !coordFallbackDisabled() {
+		t := time.Now()
+		cerr := p.coordClick(ctx, el, rem)
+		clickDebugf("click: coord took=%v err=%v", time.Since(t).Round(time.Millisecond), cerr)
+		if cerr == nil {
+			landed = true
+		} else if !landed {
+			lastErr = cerr
+		}
+	}
+
+	if landed {
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = context.DeadlineExceeded
+	}
+	return fmt.Errorf("camoufox: click: %w", lastErr)
+}
+
+// scrollIntoView best-effort brings el into view, bounded SHORT. ElementHandle's
+// scroll-into-view waits for the element to be "stable" and defaults to a 30s
+// timeout, so on an animating / never-"stable" control (the live bambulab modal)
+// an unbounded call silently drains the whole action budget before the click/type
+// even starts — leaving the budget negative and every step skipped. Capped to ~1s
+// and run through p.run so the caller's context also applies; failure is ignored
+// (the coordinate paths use BoundingBox and tolerate an element not scrolled).
+func (p *cfPage) scrollIntoView(ctx context.Context, el pw.ElementHandle) {
+	sctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	to := float64(800)
+	_ = p.run(sctx, func() error {
+		return el.ScrollIntoViewIfNeeded(pw.ElementHandleScrollIntoViewIfNeededOptions{Timeout: &to})
+	})
+}
+
+// coordClick dispatches a TRUSTED mouse click at el's centre using the page's
+// virtual mouse. Unlike ElementHandle.Click it does not wait for the target to be
+// "actionable" (visible+stable+enabled+hit-testable), so it lands on a control that
+// animates every frame or that a guarded page never settles — the way go-rod's CDP
+// click does on the chromium backend. Bounded by budget.
+func (p *cfPage) coordClick(ctx context.Context, el pw.ElementHandle, budget time.Duration) error {
+	sctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	return p.run(sctx, func() error {
+		box, err := el.BoundingBox()
+		if err != nil {
+			return err
+		}
+		if box == nil || box.Width <= 0 || box.Height <= 0 {
+			return fmt.Errorf("no bounding box")
+		}
+		cx := box.X + box.Width/2
+		cy := box.Y + box.Height/2
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		return m.Click(cx, cy)
+	})
+}
+
+// elementHasBox reports whether el currently has a positive on-screen bounding box.
+// A zero-size handle is a wrapper (the live bambulab verify modal resolves the
+// Confirm/code handles to collapsed <div> wrappers), which the handle-based
+// click/type paths cannot act on. Defaults to true on a probe failure so the normal
+// path is never skipped for a healthy element.
+func (p *cfPage) elementHasBox(ctx context.Context, el pw.ElementHandle) bool {
+	sctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	has := true
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }`)
+		if err != nil {
+			return err
+		}
+		if b, ok := v.(bool); ok {
+			has = b
+		}
+		return nil
+	})
+	return has
+}
+
+// coordClickRealTarget handles a click whose handle is a zero-size wrapper: it reads
+// the handle's visible label and finds the real VISIBLE control (a button/link/
+// submit whose text matches, or a confirm/verify/submit control when the label
+// implies one) and clicks it by trusted coordinate. Returns whether it dispatched.
+func (p *cfPage) coordClickRealTarget(ctx context.Context, el pw.ElementHandle) bool {
+	sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var cx, cy float64
+	var found bool
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			var label = ((el.textContent||'') + ' ' + (el.getAttribute('aria-label')||'') + ' ' + (el.value||'')).trim().toLowerCase();
+			var wantSubmit = /(confirm|verify|submit|continue|sign in|log in)/.test(label);
+			var sel = 'button, [role="button"], input[type="submit"], input[type="button"], a[href]';
+			for (var n of document.querySelectorAll(sel)) {
+				var r = n.getBoundingClientRect();
+				if (r.width <= 0 || r.height <= 0) continue;
+				var t = ((n.textContent||'') + ' ' + (n.getAttribute('aria-label')||'') + ' ' + (n.value||'')).trim().toLowerCase();
+				var textMatch = label && t && (t.indexOf(label) >= 0 || label.indexOf(t) >= 0);
+				var submitMatch = wantSubmit && (n.type === 'submit' || /(confirm|verify|submit|continue)/.test(t));
+				if (textMatch || submitMatch) {
+					return {x: r.left + r.width/2, y: r.top + r.height/2};
+				}
+			}
+			return null;
+		}`)
+		if err != nil {
+			return err
+		}
+		if m, ok := v.(map[string]interface{}); ok {
+			if x, ok := m["x"].(float64); ok {
+				cx, found = x, true
+			}
+			if y, ok := m["y"].(float64); ok {
+				cy = y
+			}
+		}
+		return nil
+	})
+	if !found {
+		return false
+	}
+	_ = p.run(sctx, func() error {
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		return m.Click(cx, cy)
+	})
+	return true
+}
+
+// dumpClickDOM returns a structural snapshot (no values) of a zero-size click
+// handle and every visible clickable on the page, so a failed wrapper-handle click
+// shows the real control layout instead of being guessed at. Empty when debug off.
+func dumpClickDOM(ctx context.Context, p *cfPage, el pw.ElementHandle) string {
+	if os.Getenv("AGENTBROWSER_CLICK_DEBUG") == "" {
+		return ""
+	}
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out string
+	_ = p.run(sctx, func() error {
+		v, err := el.Evaluate(`el => {
+			function info(n){ if(!n) return null; var r=n.getBoundingClientRect();
+				return {tag:n.tagName, id:n.id||null, role:n.getAttribute&&n.getAttribute('role'),
+					label:((n.textContent||'').trim().slice(0,24))||null,
+					w:Math.round(r.width), h:Math.round(r.height), x:Math.round(r.left), y:Math.round(r.top)}; }
+			var handle = info(el);
+			var cand = [].slice.call(document.querySelectorAll('button, [role="button"], input[type="submit"], a[href]'))
+				.map(info).filter(function(c){ return c && c.w>0 && c.h>0; });
+			return JSON.stringify({handle:handle, clickables:cand});
+		}`)
+		if err != nil {
+			out = "dump-err: " + err.Error()
+			return nil
+		}
+		if s, ok := v.(string); ok {
+			out = s
+		}
+		return nil
+	})
+	return out
+}
+
+// coordType focuses el with a trusted coordinate mouse click, selects any existing
+// content, and types the text with the page keyboard — real, TRUSTED key events
+// with no actionability wait, mirroring go-rod's CDP typing. It is the type
+// counterpart of coordClick for a controlled field that ignores untrusted input
+// events or that never settles for ElementHandle.Type. Bounded by budget.
+func (p *cfPage) coordType(ctx context.Context, el pw.ElementHandle, text string, budget time.Duration) error {
+	sctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	return p.run(sctx, func() error {
+		box, err := el.BoundingBox()
+		if err != nil {
+			return err
+		}
+		if box == nil || box.Width <= 0 || box.Height <= 0 {
+			return fmt.Errorf("no bounding box")
+		}
+		cx := box.X + box.Width/2
+		cy := box.Y + box.Height/2
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		if err := m.Click(cx, cy); err != nil {
+			return err
+		}
+		kb := p.pg.Keyboard()
+		_ = kb.Press("Control+a") // select existing content so the type replaces it
+		delay := float64(20)
+		return kb.Type(text, pw.KeyboardTypeOptions{Delay: &delay})
+	})
 }
 
 func (p *cfPage) ClickAt(ctx context.Context, x, y int) error {
@@ -286,23 +687,195 @@ func (p *cfPage) ClickAt(ctx context.Context, x, y int) error {
 }
 
 // TypeInto focuses the element, clears it, and types with real key events and a
-// small per-key delay (human-like pacing).
+// small per-key delay (human-like pacing). Each step is best-effort: a guarded
+// one-time-code field (readonly until clicked, or under a transient overlay)
+// rejects a programmatic clear/type, so — mirroring the rodbackend path — the
+// value is verified and, if it did not land, the field is un-guarded with a real
+// click and the value set directly with input/change events a framework listens
+// for. A failed clear must NOT abort the whole verification step (this was the
+// camoufox bambulab OTP failure: el.Fill("") errored and nothing recovered it).
 func (p *cfPage) TypeInto(ctx context.Context, e browser.Element, text string) error {
 	el, err := asHandle(e)
 	if err != nil {
 		return err
 	}
-	_ = el.ScrollIntoViewIfNeeded()
-	if err := p.run(ctx, func() error { return el.Fill("") }); err != nil { // clear
-		return fmt.Errorf("camoufox: clear: %w", err)
+	p.scrollIntoView(ctx, el)
+	remaining := func() time.Duration {
+		if dl, ok := ctx.Deadline(); ok {
+			return time.Until(dl)
+		}
+		return 8 * time.Second
 	}
+	// One slow step at most before the fallbacks. A guarded/animating field makes the
+	// real-key attempt block until timeout, so it is capped SHORT and the budget that
+	// remains is reserved for the trusted coordinate fallback and the submit click
+	// that follows — overrunning here is what left the submit click with an expired
+	// context ("camoufox: click: context deadline exceeded", empty field).
+	short := func(d time.Duration, fn func() error) error {
+		sctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return p.run(sctx, fn)
+	}
+	stepMs := float64(1500)
 	delay := float64(20)
-	if err := p.run(ctx, func() error {
-		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: timeoutMs(ctx)})
-	}); err != nil {
-		return fmt.Errorf("camoufox: type: %w", err)
+	force := true
+	readValue := func() string {
+		var got string
+		_ = short(time.Second, func() error {
+			v, verr := el.Evaluate("el => el.value")
+			if s, ok := v.(string); ok {
+				got = s
+			}
+			return verr
+		})
+		return got
 	}
-	return nil
+	// landed reports WHETHER the typed value is in the field, never the value itself —
+	// the field may hold a password/OTP, which must never be logged.
+	landed := func() string {
+		if readValue() == text {
+			return "yes"
+		}
+		return "no"
+	}
+	clickDebugf("type: budget=%v len=%d", remaining().Round(time.Millisecond), len(text))
+	// Normal path (best-effort — errors swallowed; the fallbacks below recover). Use
+	// Playwright's own focus/clear/type: a raw `el.value=''` desyncs a framework-
+	// controlled input (React/Vue) so the subsequent keys do not register, which broke
+	// the modal / spa-jwt logins. Fill/Type do not wait for pointer "stability", so
+	// they still work on an animating field.
+	_ = short(2*time.Second, func() error { return el.Focus() })
+	_ = short(2*time.Second, func() error { return el.Fill("", pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
+	t0 := time.Now()
+	_ = short(2*time.Second, func() error {
+		return el.Type(text, pw.ElementHandleTypeOptions{Delay: &delay, Timeout: &stepMs})
+	})
+	clickDebugf("type: real-keys took=%v landed=%s budgetLeft=%v", time.Since(t0).Round(time.Millisecond), landed(), remaining().Round(time.Millisecond))
+	// Canonicalise with Playwright's Fill EVEN WHEN the keystrokes appear to have
+	// landed. On a React-controlled input, real keystrokes can leave el.value correct
+	// while React's internal state is stale/partial — so a form submit sends a
+	// MISMATCHED value: live, the bambulab Confirm was enabled and clicked yet the
+	// fresh, correct-looking code was rejected. Fill sets the value through the browser
+	// protocol and fires a React-visible input event, forcing React's state to match.
+	// (It also recovers the camoufox anti-detect prototype-patching case that breaks
+	// the native setter in fallback B, and is a no-op risk when the field is already
+	// correct.)
+	ferr := short(3*time.Second, func() error { return el.Fill(text, pw.ElementHandleFillOptions{Force: &force, Timeout: &stepMs}) })
+	clickDebugf("type: fill err=%s landed=%s", errStr(ferr, text), landed())
+	if readValue() == text {
+		return nil
+	}
+	// Fallback B: NATIVE value setter + input/change, so a React/Vue-controlled input
+	// registers the change (a plain `el.value = v` is silently reverted). Wrapped in
+	// try/catch so camoufox's patched prototype cannot throw and mask the later steps.
+	var jerr error
+	_ = short(2*time.Second, func() error {
+		_, jerr = el.Evaluate(`(el, v) => { try {
+			el.focus();
+			var proto = (el.tagName === 'TEXTAREA') ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+			var d = Object.getOwnPropertyDescriptor(proto, 'value');
+			if (d && d.set) { d.set.call(el, ''); d.set.call(el, v); } else { el.value = ''; el.value = v; }
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		} catch (e) {} }`, text)
+		return jerr
+	})
+	clickDebugf("type: native err=%s landed=%s", errStr(jerr, text), landed())
+	if readValue() == text {
+		return nil
+	}
+	// Fallback C: TRUSTED coordinate entry — focus by a real mouse click and type with
+	// the page keyboard (real key events, no actionability wait), mirroring go-rod's
+	// CDP typing. The last resort for a field that none of the above can set.
+	budget := remaining() - 2*time.Second // reserve budget for the submit click that follows
+	if budget > 3*time.Second {
+		budget = 3 * time.Second
+	}
+	clickDebugf("type: -> coord budget=%v", budget.Round(time.Millisecond))
+	if budget > 0 && !coordFallbackDisabled() {
+		cerr := p.coordType(ctx, el, text, budget)
+		clickDebugf("type: coord err=%s landed=%s", errStr(cerr, text), landed())
+		if readValue() == text {
+			return nil
+		}
+	}
+	// Fallback D: the handle is not the real input — Fill reported "not an <input>",
+	// or it has no bounding box: a zero-size wrapper <div> while the actual OTP input
+	// is elsewhere (the live bambulab case, confirmed by the debug: hit="DIV" w=0 h=0).
+	// Find the real VISIBLE one-time-code input and type into IT by coordinate.
+	if !coordFallbackDisabled() {
+		if ok := p.coordTypeRealInput(ctx, text, delay); ok {
+			clickDebugf("type: real-input landed=yes")
+			return nil
+		}
+		clickDebugf("type: real-input landed=no dom=%s", dumpOTPDOM(ctx, p, el))
+	}
+	// Nothing landed the value; report the most specific failure.
+	switch {
+	case ferr != nil:
+		return fmt.Errorf("camoufox: type: %s", errStr(ferr, text))
+	case jerr != nil:
+		return fmt.Errorf("camoufox: type: %s", errStr(jerr, text))
+	default:
+		return fmt.Errorf("camoufox: type: value did not land in the field")
+	}
+}
+
+// coordTypeRealInput handles the case where the type handle points to a non-input
+// wrapper (a zero-size <div> from a React remount) while the real OTP <input> is
+// elsewhere: it finds the first VISIBLE one-time-code / code / numeric input, types
+// into it by trusted coordinate keyboard, and verifies that input's own value.
+func (p *cfPage) coordTypeRealInput(ctx context.Context, text string, delay float64) bool {
+	sctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	const sel = `input[autocomplete="one-time-code"], input[name="code"], input[inputmode="numeric"]`
+	var cx, cy float64
+	var found bool
+	_ = p.run(sctx, func() error {
+		v, err := p.pg.Evaluate(`(sel) => {
+			for (const el of document.querySelectorAll(sel)) {
+				const r = el.getBoundingClientRect();
+				if (r.width > 0 && r.height > 0) return {x: r.left + r.width/2, y: r.top + r.height/2};
+			}
+			return null;
+		}`, sel)
+		if err != nil {
+			return err
+		}
+		if m, ok := v.(map[string]interface{}); ok {
+			if x, ok := m["x"].(float64); ok {
+				cx, found = x, true
+			}
+			if y, ok := m["y"].(float64); ok {
+				cy = y
+			}
+		}
+		return nil
+	})
+	if !found {
+		return false
+	}
+	_ = p.run(sctx, func() error {
+		m := p.pg.Mouse()
+		if err := m.Move(cx, cy); err != nil {
+			return err
+		}
+		if err := m.Click(cx, cy); err != nil {
+			return err
+		}
+		kb := p.pg.Keyboard()
+		_ = kb.Press("Control+a")
+		return kb.Type(text, pw.KeyboardTypeOptions{Delay: &delay})
+	})
+	var got string
+	_ = p.run(sctx, func() error {
+		v, err := p.pg.Evaluate(`(sel) => { for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width > 0 && r.height > 0) return el.value || ''; } return ''; }`, sel)
+		if s, ok := v.(string); ok {
+			got = s
+		}
+		return err
+	})
+	return got == text
 }
 
 // TypeText types into the focused element without a handle (visual/coordinate

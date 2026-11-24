@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+	"time"
+)
 
 func TestVisionDefault(t *testing.T) {
 	t.Setenv("AGENTBROWSER_LLM_VISION", "") // no override
@@ -86,5 +90,51 @@ func TestDefaultBackendFromEnv(t *testing.T) {
 	}
 	if cfg.BackendFor("https://c.example.com/x") != "camoufox" {
 		t.Errorf("global backend not applied for unlisted host")
+	}
+}
+
+func TestEnvDuration(t *testing.T) {
+	const def = 5 * time.Minute
+	cases := []struct {
+		set  bool
+		val  string
+		want time.Duration
+	}{
+		{false, "", def}, // unset → default
+		{true, "", def},  // empty → default
+		{true, "12m", 12 * time.Minute},
+		{true, "90s", 90 * time.Second},
+		{true, "garbage", def}, // unparseable → default
+		{true, "-3m", def},     // negative → default
+		{true, "0s", 0},        // explicit zero is honored
+	}
+	for _, c := range cases {
+		if c.set {
+			t.Setenv("AGENTBROWSER_TEST_DUR", c.val)
+		} else {
+			os.Unsetenv("AGENTBROWSER_TEST_DUR")
+		}
+		if got := envDuration("AGENTBROWSER_TEST_DUR", def); got != c.want {
+			t.Errorf("envDuration(set=%v, %q) = %v, want %v", c.set, c.val, got, c.want)
+		}
+	}
+}
+
+func TestVerifyTimeoutFromEnv(t *testing.T) {
+	t.Setenv("AGENTBROWSER_VERIFY_TIMEOUT", "12m")
+	t.Setenv("AGENTBROWSER_TIMEOUT", "14m")
+	cfg := Default()
+	if cfg.VerifyTimeout != 12*time.Minute {
+		t.Errorf("VerifyTimeout = %v, want 12m", cfg.VerifyTimeout)
+	}
+	if cfg.Timeout != 14*time.Minute {
+		t.Errorf("Timeout = %v, want 14m", cfg.Timeout)
+	}
+}
+
+func TestVerifyTimeoutDefaultsZero(t *testing.T) {
+	os.Unsetenv("AGENTBROWSER_VERIFY_TIMEOUT")
+	if cfg := Default(); cfg.VerifyTimeout != 0 {
+		t.Errorf("VerifyTimeout default = %v, want 0 (use authenticator default)", cfg.VerifyTimeout)
 	}
 }

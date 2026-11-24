@@ -23,11 +23,23 @@ type Config struct {
 	LLM       LLMConfig
 	StepLimit int // max agent steps per job before "stuck"
 
+	// VerifyTimeout bounds how long a single verification fetch (doVerify)
+	// waits for a code/link. 0 means "use the authenticator default" (90s).
+	// Raise it (AGENTBROWSER_VERIFY_TIMEOUT) when the mailbox relay is slow:
+	// e.g. the HackerOne mail-forwarder can take many minutes to forward a
+	// Bambu Lab OTP, far longer than the 90s default poll window. A value
+	// here is capped by the overall per-job Timeout, so raise both together.
+	VerifyTimeout time.Duration
+
 	// Backend selects the browser engine ("chromium" | "camoufox"), default
 	// "chromium". BackendByTarget pins a specific target host to a backend,
 	// overriding Backend for that host (host matched case-insensitively).
 	Backend         string
 	BackendByTarget map[string]string
+
+	// CredsFile is the plaintext YAML file holding per-account credentials
+	// (AGENTBROWSER_CREDS; default <Workspace>/accounts.yaml).
+	CredsFile string
 }
 
 // BackendFor returns the backend to use for a target URL/host: a per-target
@@ -118,6 +130,10 @@ func Default() Config {
 	if ws == "" {
 		ws = ".workspace"
 	}
+	credsFile := os.Getenv("AGENTBROWSER_CREDS")
+	if credsFile == "" {
+		credsFile = filepath.Join(ws, "accounts.yaml")
+	}
 	prov := os.Getenv("AGENTBROWSER_LLM")
 	if prov == "" {
 		switch {
@@ -136,13 +152,29 @@ func Default() Config {
 		Headless:        strings.ToLower(os.Getenv("AGENTBROWSER_HEADFUL")) != "1",
 		ProxyURL:        os.Getenv("AGENTBROWSER_PROXY"),
 		UserAgent:       os.Getenv("AGENTBROWSER_UA"), // optional; empty = real Chrome UA, headless marker stripped
-		Timeout:         5 * time.Minute,
+		Timeout:         envDuration("AGENTBROWSER_TIMEOUT", 5*time.Minute),
+		VerifyTimeout:   envDuration("AGENTBROWSER_VERIFY_TIMEOUT", 0),
 		Capture:         CaptureWindow{N: 20, T: 10 * time.Second},
 		LLM:             LLMConfig{Provider: prov, JSONMode: true, Vision: visionDefault(prov), PriceIn: envFloat("AGENTBROWSER_LLM_PRICE_IN"), PriceOut: envFloat("AGENTBROWSER_LLM_PRICE_OUT")},
 		StepLimit:       40,
 		Backend:         backendDefault(),
 		BackendByTarget: parseBackendTargets(os.Getenv("AGENTBROWSER_BACKEND_TARGETS")),
+		CredsFile:       credsFile,
 	}
+}
+
+// envDuration reads a Go duration env var (e.g. "12m", "90s"), returning def
+// when the var is unset or does not parse.
+func envDuration(name string, def time.Duration) time.Duration {
+	s := strings.TrimSpace(os.Getenv(name))
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return def
+	}
+	return d
 }
 
 // envFloat reads a float env var (USD-per-1M-token price), 0 if unset/invalid.

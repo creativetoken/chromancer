@@ -83,8 +83,19 @@ before the SPA's JS handler is ready), independent of the visual-perception work
 (its path touches none of these changes; chromium is deterministically green).
 Tracked as a separate camoufox robustness follow-up, not a regression.
 
-**Live-attempt log (this effort):** #3 operator run — failed `handoff_timeout`
-(escalation bug, now fixed); live visual sign-in still unconfirmed.
+**Live-run #4 (operator) + fix:** login worked end-to-end on camoufox and reached
+the email-OTP step (code fetched 4×), but OTP entry failed — camoufox
+`cfPage.TypeInto` hard-failed at `el.Fill("")` on the guarded code field with no
+recovery. Fixed: `TypeInto` now mirrors the rodbackend guarded-input fallback
+(verify value landed → real click to un-guard → direct value-set + input/change).
+Lab repro `combined-verify-keyguard` (blocks all real key events); green both
+backends. Handoff noVNC link now opens from the host (script publishes the port).
+Full agent-primary re-run: chromium green (ok 353s); camoufox green except the
+known `spa-jwt` timing flake (independent — see above).
+
+**Live-attempt log (this effort):** #3 — failed (escalation bug, fixed); #4 —
+failed at OTP entry (camoufox typing bug, fixed). Live sign-in still unconfirmed;
+re-run `bash scripts/live-bambulab.sh` to verify OTP now lands.
 
 ---
 

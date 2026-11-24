@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -224,6 +226,7 @@ func (a *Authenticator) runAgentPrimary(ctx context.Context, p browser.Page, rec
 	if a.Agent == nil {
 		return fmt.Errorf("%w: agent-primary auth needs an LLM provider", ErrFlowFailed)
 	}
+	a.codeSent = false
 	since := time.Now()
 
 	// Navigate to the entry URL. Prefer the operator hint; fall back to the target
@@ -299,11 +302,51 @@ func (a *Authenticator) escalateHuman(ctx context.Context, p browser.Page, rec *
 		if err := a.doHandoff(ctx, reason); err != nil {
 			return err
 		}
-		if ok, ev := a.confirmAuthenticated(ctx, p, rec); ok {
-			a.trace.SuccessEvidence = ev
-			a.trace.Add("authenticated after human handoff: %s", strings.Join(ev, ", "))
+		// The human just finished in the browser. A login redirect and the auth
+		// cookies it sets can lag the Enter keypress, so settle the page and RETRY
+		// the deterministic success check for a few seconds rather than probing once
+		// immediately (which failed to recognise a human-completed login).
+		deadline := time.Now().Add(12 * time.Second)
+		for {
+			_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+			if ok, ev := a.confirmAuthenticated(ctx, p, rec); ok {
+				a.trace.SuccessEvidence = ev
+				a.trace.Add("authenticated after human handoff: %s", strings.Join(ev, ", "))
+				return nil
+			}
+			if ctx.Err() != nil || time.Now().After(deadline) {
+				break
+			}
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-ctx.Done():
+			}
+		}
+		// The strict deterministic signals didn't fire. The OPERATOR completed the
+		// handoff and pressed Enter, so trust a page that is clearly PAST the login
+		// flow — no visible password field and the URL has left the sign-in route
+		// onto a different, non-auth page. (bambulab lands on its homepage after
+		// login, whose search box trips the strict detector's "identifier present"
+		// guard, and whose auth cookies did not register as strong evidence.)
+		st := mustPerceive(ctx, a, p)
+		if a.looksPastLogin(st) {
+			a.trace.SuccessEvidence = []string{"operator_confirmed:" + st.URL}
+			a.trace.Add("authenticated after human handoff (operator-confirmed, off the login route): %s", st.URL)
 			return nil
 		}
+		// Record what the page looked like (cookie NAMES only, never values) so the
+		// failure — and why the strong signals missed — is diagnosable next time.
+		f := Classify(st)
+		cookieNames := ""
+		if cur, err := p.ExportState(ctx); err == nil {
+			var names []string
+			for _, c := range cur.Cookies {
+				names = append(names, c.Name)
+			}
+			cookieNames = strings.Join(names, ",")
+		}
+		a.trace.Add("post-handoff: not authenticated (url=%s title=%q visible_password=%v visible_identifier=%v cookies=[%s])",
+			st.URL, st.Title, f.Password != nil, f.Identifier != nil, cookieNames)
 	}
 	return sentinel
 }
@@ -369,12 +412,96 @@ func (a *Authenticator) agentEnterVerification(ctx context.Context, p browser.Pa
 	// once the agent is driving the verification, the code must have time to
 	// arrive and be entered (slower engines like Camoufox need the headroom).
 	if err := a.doVerify(ctx, p, deps, vs, since, a.agentVerifyBudget()); err != nil {
+		a.saveOTPDebug(ctx, p, "verify_failed: "+err.Error())
 		return "", err
 	}
 	if vs.LinkOnly {
 		return "verification link opened", nil
 	}
 	return "verification code entered", nil
+}
+
+// saveOTPDebug writes a diagnostic screenshot and a summary of the page's input
+// fields to the account workspace when OTP entry fails, so the actual OTP widget
+// (one input vs. multiple digit boxes, a custom component, an error message) can
+// be inspected offline. Best-effort: it never affects the flow.
+func (a *Authenticator) saveOTPDebug(ctx context.Context, p browser.Page, note string) {
+	st := mustPerceive(ctx, a, p)
+	var fields, clickables []string
+	for i := range st.Nodes {
+		n := &st.Nodes[i]
+		if !n.Visible {
+			continue
+		}
+		if n.Tag == "input" {
+			fields = append(fields, fmt.Sprintf("{type=%q mode=%q max=%d id=%q name=%q ac=%q val=%q}",
+				n.Type, n.InputMode, n.MaxLength, n.ID, n.NameAttr, n.Autocomplete, n.Value))
+		} else if n.Tag == "button" || n.Tag == "a" || n.Role == "button" {
+			lbl := n.Name
+			if lbl == "" {
+				lbl = n.Text
+			}
+			clickables = append(clickables, fmt.Sprintf("{%s %q}", n.Tag, lbl))
+		}
+	}
+	// Raw-DOM probe: does a send-code trigger exist AT ALL (even if the perceiver
+	// can't see it)? Reports its tag + whether it would be perceivable.
+	sendProbe := ""
+	if v, err := p.Eval(ctx, `() => {
+		const re = /\b(send|get|request|resend)\b[\s\S]{0,16}?\bcode\b/i;
+		for (const el of document.querySelectorAll('*')) {
+			if (el.children && el.children.length > 2) continue;
+			const t = (el.innerText || el.textContent || '').trim();
+			if (!t || t.length > 28 || !re.test(t)) continue;
+			const tag = el.tagName.toLowerCase();
+			const perceivable = tag === 'button' || tag === 'a' || el.getAttribute('role') === 'button' || el.hasAttribute('onclick');
+			return tag + ' text=' + JSON.stringify(t) + ' perceivable=' + perceivable;
+		}
+		return 'none';
+	}`); err == nil {
+		sendProbe = v.Str()
+	}
+	shotPath := ""
+	ws := os.Getenv("AGENTBROWSER_WORKSPACE")
+	if ws != "" {
+		if shot, err := p.Screenshot(ctx); err == nil {
+			dir := filepath.Join(ws, "accounts", a.Account)
+			_ = os.MkdirAll(dir, 0o700)
+			fn := filepath.Join(dir, fmt.Sprintf("otp-debug-%d.png", time.Now().Unix()))
+			if os.WriteFile(fn, shot, 0o600) == nil {
+				shotPath = fn
+			}
+		}
+	}
+	a.trace.Add("otp-debug (%s): url=%s inputs=%s clickables=%s send_code_probe=[%s] screenshot=%s",
+		note, st.URL, strings.Join(fields, " "), strings.Join(clickables, " "), sendProbe, shotPath)
+	a.log("otp_debug", map[string]any{"note": note, "url": st.URL, "inputs": fields,
+		"clickables": clickables, "send_code_probe": sendProbe, "screenshot": shotPath})
+}
+
+// probeVerifyMessage logs any visible error/status text on the verification screen
+// after a submit (e.g. "incorrect code"), so the trace shows whether a submitted
+// code was REJECTED by the site vs. the submit not firing at all. Best-effort; it
+// never surfaces the code and never affects the flow.
+func (a *Authenticator) probeVerifyMessage(ctx context.Context, p browser.Page) {
+	v, err := p.Eval(ctx, `() => {
+		const out = [];
+		for (const el of document.querySelectorAll('[role="alert"], [aria-live="assertive"], [aria-live="polite"], .error, .err, .ant-form-item-explain-error, .ant-message, .el-message, [class*="error" i], [class*="invalid" i]')) {
+			const t = (el.innerText || el.textContent || '').trim();
+			if (t && t.length <= 140) out.push(t);
+		}
+		const body = (document.body && document.body.innerText) || '';
+		const m = body.match(/[^\n]*\b(incorrect|invalid|expired|wrong|does not match|too many|try again|resend)\b[^\n]*/i);
+		if (m) out.push(m[0].trim());
+		return out.slice(0, 4).join(' | ').slice(0, 300);
+	}`)
+	if err != nil {
+		return
+	}
+	if msg := strings.TrimSpace(v.Str()); msg != "" {
+		a.trace.Add("verification: page message after submit: %q", msg)
+		a.log("verify_message", map[string]any{"message": msg})
+	}
 }
 
 // agentVerifyBudget is the verification window the agent gets for entering a
@@ -443,7 +570,31 @@ func (a *Authenticator) agentCheckLoggedIn(ctx context.Context, p browser.Page, 
 	if rec != nil {
 		xhrs = rec.PostLoginXHRs()
 	}
-	return SuccessDetector{}.IsAuthenticated(ctx, p, st, a.base, xhrs, true)
+	if ok, ev := (SuccessDetector{}).IsAuthenticated(ctx, p, st, a.base, xhrs, true); ok {
+		return true, ev
+	}
+	// The strict detector missed. The agent has been driving the sign-in, so a page
+	// that is clearly PAST the login flow (no visible password field, URL left the
+	// entry route, title is not an auth page) is logged in even when the strict
+	// signals — which key on specific cookie names, a /me XHR, or an authed-only
+	// element — don't match this site's shape (bambulab lands on its homepage, whose
+	// search box trips the "identifier present" guard). A false positive is caught
+	// downstream: the replay check marks such a session non-replayable and a later
+	// run logs in fresh.
+	if a.looksPastLogin(st) {
+		return true, []string{"off_login_route:" + st.URL}
+	}
+	return false, nil
+}
+
+// looksPastLogin reports that st is clearly a page AFTER the login flow: no visible
+// password field, the URL has left the entry route, and the title is not an auth
+// page. Weaker than SuccessDetector (no server-confirmed signal), so it is only
+// used with additional context — the agent having driven the sign-in, or an
+// operator confirming a handoff — with the replay check as the backstop.
+func (a *Authenticator) looksPastLogin(st perceive.State) bool {
+	f := Classify(st)
+	return f.Password == nil && a.base.URL != "" && st.URL != a.base.URL && !authWordRe.MatchString(st.Title)
 }
 
 // confirmAuthenticated re-perceives and runs success detection once (used after

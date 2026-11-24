@@ -40,9 +40,15 @@ func NewViewProxy(upstream *url.URL, valid func(token string) bool) *ViewProxy {
 	}
 }
 
-// tokenFromRequest reads the handoff token from the query string, the
-// Sec-WebSocket-Protocol header (so a browser WebSocket can carry it without a
-// custom header), or an X-Handoff-Token header.
+// handoffCookie is the cookie name used to carry the token to sub-resource
+// requests that cannot include the query parameter.
+const handoffCookie = "handoff_token"
+
+// tokenFromRequest reads the handoff token from the query string, an
+// X-Handoff-Token header, the Sec-WebSocket-Protocol header (so a browser
+// WebSocket can carry it without a custom header), or the handoff cookie (set on
+// the first authenticated request so noVNC's relative-URL sub-resources — CSS,
+// JS, images — which carry no query token still authenticate).
 func tokenFromRequest(r *http.Request) string {
 	if t := r.URL.Query().Get("token"); t != "" {
 		return t
@@ -58,6 +64,9 @@ func tokenFromRequest(r *http.Request) string {
 			return rest
 		}
 	}
+	if c, err := r.Cookie(handoffCookie); err == nil && strings.TrimSpace(c.Value) != "" {
+		return c.Value
+	}
 	return ""
 }
 
@@ -71,5 +80,16 @@ func (v *ViewProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Set a cookie carrying the (already-validated) token so noVNC's relative-URL
+	// sub-resources — which cannot include ?token= — authenticate on this same
+	// loopback, token-gated origin. HttpOnly + SameSite=Strict; it lives only as
+	// long as the handoff token stays valid.
+	http.SetCookie(w, &http.Cookie{
+		Name:     handoffCookie,
+		Value:    tok,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
 	v.proxy.ServeHTTP(w, r)
 }

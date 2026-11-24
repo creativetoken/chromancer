@@ -74,11 +74,20 @@ type App struct {
 
 // New builds an App from config, reading the store key from the environment.
 func New(cfg config.Config) (*App, error) {
-	key, err := identity.KeyFromEnv()
-	if err != nil {
-		return nil, err
+	// Credentials come from a plaintext YAML file the operator edits directly.
+	// Encryption is optional: AGENTBROWSER_KEY is read ONLY when set (to open
+	// legacy encrypted session/mailbox files, or to re-enable encryption on
+	// purpose); otherwise key stays nil and session.enc / mailbox tokens are
+	// written in plaintext.
+	var key *[32]byte
+	if os.Getenv(identity.KeyEnv) != "" {
+		k, err := identity.KeyFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		key = k
 	}
-	creds, err := identity.NewFileStore(cfg.Workspace, key)
+	creds, err := identity.NewYAMLStore(cfg.CredsFile)
 	if err != nil {
 		return nil, err
 	}
@@ -225,20 +234,21 @@ func (a *App) RunAuth(ctx context.Context, account string, mode auth.Mode, hints
 	authr := &auth.Authenticator{
 		Target: target, Account: account, Creds: creds, Profile: profile,
 		Perceiver: perceive.New(), Router: authRouter,
-		Sessions:    &auth.FileSessionStore{Path: ws.SessionEnc, Key: a.Key},
-		Writer:      &handback.FileWriter{Dir: ws.Artefacts, Account: account},
-		Audit:       al,
-		Budget:      bud,
-		Verifier:    a.verifier(account, creds, asker),
-		Captcha:     resolver,
-		Handoff:     handoff,
-		Agent:       agentModel,
-		VisionAgent: visionModel,
-		Recovery:    a.Recovery,
-		AuthDriver:  a.AuthDriver,
-		Capture:     handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
-		EntryCache:  ws.CacheDir,
-		Timeout:     8 * time.Second,
+		Sessions:      &auth.FileSessionStore{Path: ws.SessionEnc, Key: a.Key},
+		Writer:        &handback.FileWriter{Dir: ws.Artefacts, Account: account},
+		Audit:         al,
+		Budget:        bud,
+		Verifier:      a.verifier(account, creds, asker),
+		Captcha:       resolver,
+		Handoff:       handoff,
+		Agent:         agentModel,
+		VisionAgent:   visionModel,
+		Recovery:      a.Recovery,
+		AuthDriver:    a.AuthDriver,
+		Capture:       handback.CaptureWindow{N: a.Cfg.Capture.N, T: a.Cfg.Capture.T},
+		EntryCache:    ws.CacheDir,
+		Timeout:       8 * time.Second,
+		VerifyTimeout: a.Cfg.VerifyTimeout,
 	}
 	if rr, ok := asker.(RecoveryReporter); ok && rr != nil {
 		authr.OnRecovering = rr.Recovering

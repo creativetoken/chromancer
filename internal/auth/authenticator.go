@@ -70,6 +70,7 @@ type Authenticator struct {
 	base           Baseline
 	pendingSolve   string
 	pendingPayload string // token/text of the pending solve (for the reached-backend check)
+	codeSent       bool   // a "Send code" trigger has been clicked this run (don't re-click: respect the server cooldown)
 }
 
 // Run authenticates (target, account) in the given mode and returns the
@@ -174,6 +175,7 @@ func (a *Authenticator) authenticate(ctx context.Context, p browser.Page, rec *h
 	// sent when the form is submitted (below), so this is the lower bound for
 	// "code newer than the flow" — set it here, not in resolve (which runs after
 	// the submit), or the just-sent code would be excluded.
+	a.codeSent = false
 	since := time.Now()
 	root := a.Target
 	res := &entry.Resolver{CacheDir: a.EntryCache}
@@ -555,6 +557,13 @@ func (a *Authenticator) doHandoff(ctx context.Context, reason captcha.BlockReaso
 	return nil
 }
 
+// sendCodeGrace is how long doVerify polls for an already-delivered (auto-sent)
+// code before pressing a "Send code" trigger, so an auto-sending site isn't sent
+// a redundant request that burns its re-send cooldown. Correctness does not
+// depend on this value — because *since is never advanced, a code that arrives
+// after the grace window (even after a needless trigger press) is still matched.
+const sendCodeGrace = 8 * time.Second
+
 // doVerify fetches a code/link and applies it to the page.
 func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowDeps, vs VerifyStep, since *time.Time, verifyFor time.Duration) error {
 	vd := verifyFor
@@ -570,9 +579,53 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 	}
 	a.trace.Verification = append(a.trace.Verification, fmt.Sprintf("%s (%s)", vs.Channel, vs.Hint))
 	a.log("verification", map[string]any{"channel": string(vs.Channel), "hint": vs.Hint, "link_only": vs.LinkOnly})
-	vctx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	res, err := a.Verifier.GetCode(vctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: deadline})
+	// The verification code reaches us one of two ways: (a) auto-sent when the
+	// login form was submitted (e.g. bambulab) — already in flight or in the inbox
+	// by the time this screen appears — or (b) only after a "Send code" trigger is
+	// pressed. We must NOT assume (b). Pressing "Send code" when the code was
+	// already auto-sent burns the server's re-send cooldown, and — the bug this
+	// fixes — advancing the freshness window to the click excludes the code already
+	// delivered, so the fetch times out on a code sitting in the inbox. So: poll
+	// briefly for an already-delivered code first; only if none shows do we press
+	// the trigger (once per sign-in), and we NEVER advance *since — GetCode returns
+	// the newest unclaimed code, so a superseded one cannot win, and a stale code
+	// from before this sign-in is already excluded by the window's start. The
+	// trigger is often a React <span/div onClick> with no onclick/role, invisible
+	// to the DOM perceiver — hence the JS fallback by text.
+	fetch := func(dl time.Time) (verify.Result, error) {
+		fctx, fcancel := context.WithDeadline(ctx, dl)
+		defer fcancel()
+		return a.Verifier.GetCode(fctx, verify.Request{Channel: vs.Channel, Account: a.Account, Target: a.Target, Hint: vs.Hint, WantLink: vs.LinkOnly, Since: *since, Deadline: dl})
+	}
+	var res verify.Result
+	var err error
+	if !vs.LinkOnly && !a.codeSent {
+		grace := time.Now().Add(sendCodeGrace)
+		if grace.After(deadline) {
+			grace = deadline
+		}
+		res, err = fetch(grace) // (a) catch an auto-sent code without touching the trigger
+		if err != nil && (errors.Is(err, verify.ErrTimeout) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() == nil {
+			// (b) nothing delivered yet — press the trigger once, then poll the rest.
+			clicked := ""
+			if vs.SendCode != nil {
+				if cerr := (actor{deps}).click(ctx, vs.SendCode, "send-code"); cerr == nil {
+					clicked = firstNonEmptyStr(vs.SendCode.Name, vs.SendCode.Text, "send-code")
+				}
+			}
+			if clicked == "" {
+				clicked = clickSendCodeJS(ctx, p)
+			}
+			if clicked != "" {
+				a.codeSent = true
+				a.trace.Add("verification: triggered code delivery (%q)", strings.TrimSpace(clicked))
+				_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+			}
+			res, err = fetch(deadline)
+		}
+	} else {
+		res, err = fetch(deadline)
+	}
 	if err != nil {
 		if errors.Is(err, verify.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("%w: %v", ErrVerifyTimeout, err)
@@ -647,12 +700,23 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 		if err := ac.typeInto(ctx, vs.CodeField, res.Code, "otp"); err != nil {
 			return fetchFailed(err)
 		}
+		// Let the code field settle before submitting. A controlled OTP input may
+		// validate the code asynchronously (enable Confirm, fire a check), and
+		// clicking Confirm within the ~160ms it takes to re-perceive can submit
+		// before that completes — observed live as a fresh, correctly-entered code
+		// that the form then rejected.
+		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
 		f := Classify(mustPerceive(ctx, a, p))
 		if err := ac.submit(ctx, Fields{Submit: vs.Submit}, vs.CodeField); err != nil && f.Submit != nil {
 			if err2 := ac.click(ctx, f.Submit, "verify"); err2 != nil {
 				return fetchFailed(err2)
 			}
 		}
+		// After the submit, record any visible error/status so a REJECTED code (an
+		// "incorrect/expired code" message) is distinguishable in the trace from a
+		// submit that silently did not fire.
+		_ = p.WaitStable(ctx, browser.DefaultStableTimeout)
+		a.probeVerifyMessage(ctx, p)
 	case verify.ResApproved:
 		a.trace.Add("verification: push approved")
 	}
@@ -662,6 +726,45 @@ func (a *Authenticator) doVerify(ctx context.Context, p browser.Page, deps FlowD
 func mustPerceive(ctx context.Context, a *Authenticator, p browser.Page) perceive.State {
 	st, _, _ := a.Perceiver.Perceive(ctx, p)
 	return st
+}
+
+// clickSendCodeJS finds a "Send code" / "Get code" trigger by its visible text and
+// clicks it directly in the page, bypassing the DOM perceiver (such triggers are
+// often React <span onClick> elements with no onclick attribute/role, so the
+// structured perceiver cannot see them). It only clicks a small, visible, leaf-ish
+// element whose text is a FIRST-DELIVERY send-code phrase, and returns the clicked
+// text (or "" if none). Best-effort; never affects the flow on error.
+//
+// It deliberately does NOT match a "Resend" control. A resend means a code was
+// ALREADY sent — i.e. the site auto-sends on submit (bambulab) — so auto-clicking
+// it just mails a redundant second code and burns the server's re-send cooldown.
+// The grace poll timing out on a slow backend (Camoufox + email relay) does not
+// mean no code was sent, so the right move there is to keep polling for the
+// in-flight code, not to resend. A genuine resend stays the agent's explicit
+// choice via the ResendVerification tool. (Mirrors sendCodeRe, which excludes
+// resend; this is the JS fallback for when SendCode isn't perceivable.)
+func clickSendCodeJS(ctx context.Context, p browser.Page) string {
+	v, err := p.Eval(ctx, `() => {
+		const sendRe = /\b(send|get|request|email|text)\b[\s\S]{0,16}?\bcode\b/i;
+		const resendRe = /\b(resend|send again|again|didn'?t|not receive|new code)\b/i;
+		const els = Array.from(document.querySelectorAll('button, a, [role="button"], span, div, li, p'));
+		for (const el of els) {
+			if (el.children && el.children.length > 2) continue;
+			const t = (el.innerText || el.textContent || '').trim();
+			if (!t || t.length > 28 || !sendRe.test(t) || resendRe.test(t)) continue;
+			const r = el.getBoundingClientRect();
+			if (r.width <= 0 || r.height <= 0) continue;
+			const cs = getComputedStyle(el);
+			if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+			el.click();
+			return t;
+		}
+		return '';
+	}`)
+	if err != nil {
+		return ""
+	}
+	return v.Str()
 }
 
 // gotoLogin navigates to the login entrypoint (used when switching from signup).

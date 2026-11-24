@@ -123,6 +123,20 @@ func TestE2EAgentPrimaryVerifierApps(t *testing.T) {
 		// Code input is remounted after it is perceived (stale handle): the flow
 		// must re-resolve the field by stable attributes before typing.
 		{"verify-rerender", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code field blocks real key events: the code lands only via the backend's
+		// verify-value + direct value-set fallback (camoufox TypeInto parity — the
+		// bambulab OTP failure mode).
+		{"combined-verify-keyguard", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code is dispatched only after an UNPERCEIVABLE React-style "Send code"
+		// span is clicked (bambulab's verification modal): the verify flow must
+		// trigger delivery itself before the code can be fetched.
+		{"verify-sendcode", lab.DefaultUser, lab.DefaultPass, ""},
+		// Code is AUTO-SENT on login submit (Send-code is a no-op cooldown), and the
+		// Confirm button sits under a pointer-events overlay: the verify flow must
+		// poll for the already-delivered code without advancing its window, and the
+		// click must fall through to a JS dispatch within the actor's short budget.
+		// This is the exact pair of bugs that broke the live bambulab OTP run.
+		{"verify-autosend", lab.DefaultUser, lab.DefaultPass, ""},
 	}
 	for _, c := range cases {
 		c := c

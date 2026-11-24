@@ -455,3 +455,59 @@
   interstitials would wrongly re-trigger visual — the regression this guard was
   added to fix); escalate on any fill error (a type failure on a found field is
   not a readability problem).
+
+- **2026-11-22 · camoufox TypeInto reaches parity with rodbackend's guarded-input
+  fallback (live bambulab OTP fix)** · A live run got through login on camoufox and
+  reached the email-OTP step, but `cfPage.TypeInto` hard-failed at `el.Fill("")`
+  on the guarded code field and had no recovery, so the fetched code never landed
+  (4 failed attempts → human handoff). The rodbackend path already handled this:
+  type real key events, verify `el.value` took, and if not, un-guard with a real
+  click and set the value directly firing input/change. Decision: `cfPage.TypeInto`
+  now does the same — best-effort focus/clear/type (errors swallowed), value check,
+  then the click + direct-value-set fallback. Lab repro `combined-verify-keyguard`
+  (code field blocks all real key events) exercises the fallback on both backends. ·
+  alt: keep Fill-or-fail (breaks guarded OTP fields on camoufox); a camoufox-only
+  code-entry special case (duplicates the rodbackend logic that already works).
+
+- **2026-11-22 · Verification flow triggers "Send code" itself, perception-
+  independently (the real bambulab OTP blocker)** · A diagnostic screenshot of the
+  live OTP modal (saveOTPDebug) showed bambulab does not email a code until a
+  "Send code" button inside the code field is clicked — and the code field was
+  empty across every attempt, so GetCode waited for a code that was never sent and
+  timed out. The agent never clicked "Send code" not because it was gated but
+  because bambulab renders it as a React `<span onClick>` with no onclick
+  attribute / role / href, so the DOM perceiver (which keys on
+  button/a[href]/[role=button]/[onclick]) cannot see it — a perception gap, since
+  the agent can only decide about controls perception surfaces. Decision: doVerify
+  triggers delivery before fetching — clicking a perceived SendCode control if one
+  exists, else finding a "send/get/request/resend … code" trigger by its visible
+  text and clicking it directly in the page (clickSendCodeJS), bypassing the
+  perceiver; the freshness window advances to the click. The agent prompt also
+  tells it to click a perceivable "Send/Get code" control. · alt: broaden the
+  perceiver to capture all React onClick elements (floods the observation in a
+  React app, raises per-step cost); rely on the LLM alone (it can't see the span).
+  Lab repro: verify-sendcode (unperceivable React-span trigger), green both backends.
+
+- **Camoufox click/type land on animating & trusted-event-gated controls via a
+  trusted coordinate fallback (2026-11-23).** The live bambulab Confirm failed on
+  camoufox with `click: context deadline exceeded` + an empty code field, while
+  the same flow logs in on chromium/go-rod. Three camoufox-backend defects (all
+  `internal/browser/camoufox/cfpage.go`): (1) `el.ScrollIntoViewIfNeeded()` was
+  called with no timeout → Playwright's 30s default, which blocks on a control
+  that is not "stable" and drained the whole per-action budget (now bounded to
+  ~1s via `scrollIntoView`); (2) Playwright's actionability-gated
+  `ElementHandle.Click` never settles on an animating / never-"stable" target, and
+  the page-JS `el.click()` fallback dispatches an UNTRUSTED event (`isTrusted ===
+  false`) an anti-bot handler ignores — whereas go-rod dispatches a TRUSTED CDP
+  coordinate click; (3) a dispatch after a navigating click aborts the navigation.
+  Decision: camoufox `Click` adds a TRUSTED coordinate `Mouse` click (`coordClick`)
+  and `TypeInto` a TRUSTED `Keyboard` type (`coordType`) — no actionability wait,
+  real browser input, mirroring go-rod — and the trusted coordinate click is the
+  LAST dispatch (order: actionable → untrusted-JS el.click [overlays] → trusted
+  coordinate [animating/gated]). `AGENTBROWSER_DISABLE_COORD_FALLBACK=1` is a
+  kill-switch; `AGENTBROWSER_CLICK_DEBUG=1` prints per-click budget/sub-step/trust.
+  · alt: raw `el.value=''` clear (rejected — desyncs React-controlled inputs, broke
+  modal/spa-jwt; keep `el.Fill`). Lab repro: `TestE2ECoordEntryTrustedModal`
+  (camoufox-only; animating + trusted-gated modal), proven red→green via the
+  kill-switch. go-rod's own `WaitStableRAF` would hang on a perpetually-animating
+  element — a pre-existing rodbackend trait real sites do not trigger.

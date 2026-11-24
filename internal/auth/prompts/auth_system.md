@@ -40,7 +40,10 @@ Return exactly one action per turn, with a one-line `why`. Actions:
 - `enter_verification(id, channel, want)` — fetch the current one-time code (or
   magic link) from the account's own inbox/phone/authenticator and enter it.
   `channel` is email, sms or totp; `want` is code or link. Use this on a
-  verification screen instead of guessing digits — you never see the code.
+  verification screen instead of guessing digits — you never see the code. If the
+  code field is empty and the screen has a "Send code" / "Get code" control, click
+  that first so a code is actually dispatched; `enter_verification` also triggers
+  it automatically, so calling it directly is fine too.
 - `resend_verification(id)` — click a "resend code" control when the code has
   not arrived or has expired, then try `enter_verification` again.
 - `solve_captcha()` — run the captcha solver on the current page.

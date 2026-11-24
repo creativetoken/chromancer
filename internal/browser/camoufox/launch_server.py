@@ -105,10 +105,20 @@ def main():
         print(json.dumps({"error": f"camoufox/playwright not installed: {exc}"}), flush=True)
         sys.exit(3)
 
+    # Render into a provided display when there is one. The human-handoff path
+    # exports DISPLAY=:99 with its own Xvfb so x11vnc/noVNC can watch the browser;
+    # Camoufox's headless="virtual" would instead start its OWN, separate Xvfb that
+    # x11vnc cannot see — leaving the handoff view BLACK. So: if DISPLAY is set,
+    # render into it with headless=False (and report that display); otherwise fall
+    # back to "virtual" (Camoufox manages Xvfb itself). Either way the browser is
+    # off-screen in a virtual framebuffer — this only controls WHICH one.
+    display = os.environ.get("DISPLAY", "").strip()
+    headless_mode = False if display else "virtual"
+
     # Bind the Playwright server to IPv4 loopback explicitly: Camoufox/Playwright
     # otherwise resolves "localhost" to IPv6 (::1), which the Go client's endpoint
     # and the readiness poll may not match.
-    kwargs = dict(headless="virtual", host=host, port=port, ws_path="camoufox")
+    kwargs = dict(headless=headless_mode, host=host, port=port, ws_path="camoufox")
     if proxy_url:
         kwargs["proxy"] = {"server": proxy_url}
         kwargs["geoip"] = True  # match geoip/timezone/locale to the proxy exit

@@ -728,20 +728,30 @@ func mustPerceive(ctx context.Context, a *Authenticator, p browser.Page) perceiv
 	return st
 }
 
-// clickSendCodeJS finds a "Send code" / "Get code" / "Resend code" trigger by its
-// visible text and clicks it directly in the page, bypassing the DOM perceiver
-// (such triggers are often React <span onClick> elements with no onclick
-// attribute/role, so the structured perceiver cannot see them). It only clicks a
-// small, visible, leaf-ish element whose text is a send-code phrase, and returns
-// the clicked text (or "" if none). Best-effort; never affects the flow on error.
+// clickSendCodeJS finds a "Send code" / "Get code" trigger by its visible text and
+// clicks it directly in the page, bypassing the DOM perceiver (such triggers are
+// often React <span onClick> elements with no onclick attribute/role, so the
+// structured perceiver cannot see them). It only clicks a small, visible, leaf-ish
+// element whose text is a FIRST-DELIVERY send-code phrase, and returns the clicked
+// text (or "" if none). Best-effort; never affects the flow on error.
+//
+// It deliberately does NOT match a "Resend" control. A resend means a code was
+// ALREADY sent — i.e. the site auto-sends on submit (bambulab) — so auto-clicking
+// it just mails a redundant second code and burns the server's re-send cooldown.
+// The grace poll timing out on a slow backend (Camoufox + email relay) does not
+// mean no code was sent, so the right move there is to keep polling for the
+// in-flight code, not to resend. A genuine resend stays the agent's explicit
+// choice via the ResendVerification tool. (Mirrors sendCodeRe, which excludes
+// resend; this is the JS fallback for when SendCode isn't perceivable.)
 func clickSendCodeJS(ctx context.Context, p browser.Page) string {
 	v, err := p.Eval(ctx, `() => {
-		const re = /\b(send|get|request|resend)\b[\s\S]{0,16}?\bcode\b/i;
+		const sendRe = /\b(send|get|request|email|text)\b[\s\S]{0,16}?\bcode\b/i;
+		const resendRe = /\b(resend|send again|again|didn'?t|not receive|new code)\b/i;
 		const els = Array.from(document.querySelectorAll('button, a, [role="button"], span, div, li, p'));
 		for (const el of els) {
 			if (el.children && el.children.length > 2) continue;
 			const t = (el.innerText || el.textContent || '').trim();
-			if (!t || t.length > 28 || !re.test(t)) continue;
+			if (!t || t.length > 28 || !sendRe.test(t) || resendRe.test(t)) continue;
 			const r = el.getBoundingClientRect();
 			if (r.width <= 0 || r.height <= 0) continue;
 			const cs = getComputedStyle(el);
